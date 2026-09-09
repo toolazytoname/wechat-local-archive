@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>微信本地档案</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="rail" id="rail">
+      <header class="rail-head">
+        <button type="button" class="back" id="close-rail" hidden>返回</button>
+        <div>
+          <div class="app-name">微信</div>
+          <div class="meta" id="meta-line"></div>
+        </div>
+      </header>
+      <input id="conv-q" class="search" type="search" placeholder="搜索会话" autocomplete="off" />
+      <nav id="pins" class="pins"></nav>
+      <nav id="convos" class="convos"></nav>
+    </aside>
+    <main class="stage">
+      <header class="chat-head">
+        <button type="button" class="menu" id="open-rail">会话</button>
+        <div class="chat-titles">
+          <h1 id="chat-title">选择会话</h1>
+          <p id="chat-sub"></p>
+        </div>
+        <button type="button" class="export-btn" id="open-export">导出</button>
+      </header>
+      <div id="search-hits" class="hits hidden"></div>
+      <section class="thread" id="thread"></section>
+      <footer class="composer">
+        <label class="readable"><input type="checkbox" id="readable" checked /> 只看文字</label>
+        <input id="msg-q" type="search" placeholder="搜索消息" autocomplete="off" />
+      </footer>
+    </main>
+  </div>
+  <aside class="drawer hidden" id="drawer">
+    <div class="drawer-card">
+      <h2>导出</h2>
+      <p class="hint">从当前索引切片写出文件，不重新解密。备份 2 仍是 unverified。</p>
+      <label>范围
+        <select id="ex-scope">
+          <option value="current">当前会话</option>
+          <option value="featured">置顶目标</option>
+          <option value="all">全部会话</option>
+        </select>
+      </label>
+      <label>开始 <input id="ex-since" type="datetime-local" /></label>
+      <label>结束 <input id="ex-until" type="datetime-local" /></label>
+      <label>格式
+        <select id="ex-format">
+          <option value="md">Markdown</option>
+          <option value="jsonl">JSONL</option>
+          <option value="csv">CSV</option>
+        </select>
+      </label>
+      <label class="readable"><input type="checkbox" id="ex-readable" checked /> 只要可读文字</label>
+      <p id="ex-count" class="hint">数量预览：—</p>
+      <div class="drawer-actions">
+        <button type="button" id="ex-preview">预览数量</button>
+        <button type="button" class="export-btn" id="ex-go">导出</button>
+        <button type="button" id="ex-close">关闭</button>
+      </div>
+      <p id="ex-result" class="hint"></p>
+    </div>
+  </aside>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -125,7 +125,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "blocked", "reason": "key_access_blocked", "source_kind": None}, indent=2))
         return 3
     run_id = args.run_id or make_snapshot_id(tz_name=cfg.display_timezone)
-    records, targets, meta = collect_records(Path(args.decrypted_root), cfg, "live-db", None)
+    records, targets, meta = collect_records(Path(args.decrypted_root), cfg, "live-db", args.snapshot_id)
     if args.conversation_id:
         records = [r for r in records if r.conversation_id == args.conversation_id]
     out = export_records(
@@ -196,12 +196,51 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     from wechat_export.archive_server import serve
+    from wechat_export.loopback import BindAddressError, validate_bind_host
 
+    try:
+        validate_bind_host(args.host)
+    except BindAddressError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2), file=sys.stderr)
+        return 2
     serve(Path(args.export_dir), host=args.host, port=args.port)
     return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    if args.export_dir:
+        man = Path(args.export_dir) / "manifest.json"
+        payload = json.loads(man.read_text(encoding="utf-8"))
+        jsonl = Path(args.export_dir) / "all" / "messages.jsonl"
+        n = 0
+        kinds = set()
+        if jsonl.exists():
+            with jsonl.open(encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    n += 1
+                    rec = json.loads(line)
+                    kinds.add(rec.get("source_kind"))
+        print(
+            json.dumps(
+                {
+                    "parser_version": PARSER_VERSION,
+                    "source_kind": payload.get("source_kind"),
+                    "backup2_coverage": payload.get("backup2_coverage"),
+                    "export_status": payload.get("export_status"),
+                    "export_status_meaning": payload.get("export_status_meaning"),
+                    "manifest_record_count": payload.get("record_count"),
+                    "jsonl_record_count": n,
+                    "source_kinds_in_jsonl": sorted(k for k in kinds if k),
+                    "counts_match": payload.get("record_count") == n,
+                    "source_snapshot_id": payload.get("source_snapshot_id"),
+                    "live_db_text_decode_complete": payload.get("export_status") in {"selected_source_exported", "partial"},
+                },
+                indent=2,
+            )
+        )
+        return 0 if payload.get("backup2_coverage") == "unverified" else 0
     cfg = _cfg(args)
     snap = sorted((cfg.raw_root).glob("*"))
     latest = snap[-1] if snap else None
@@ -214,6 +253,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         "latest_snapshot": str(latest) if latest else None,
         "backup2_coverage": "unverified",
         "live_db_text_decode_complete": False,
+        "hint": "pass --export-dir to verify a specific run",
     }, indent=2))
     return 0
 
@@ -262,6 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--conversation-id")
     s.add_argument("--decrypted-root", default=None)
     s.add_argument("--run-id", default=None)
+    s.add_argument("--snapshot-id", default=None)
     s.set_defaults(func=cmd_export)
 
     s = sub.add_parser("decrypt")
@@ -271,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_decrypt)
 
     s = sub.add_parser("verify")
+    s.add_argument("--export-dir", default=None)
     s.set_defaults(func=cmd_verify)
 
     s = sub.add_parser("index")
@@ -294,6 +336,9 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     except Exception as exc:  # noqa: BLE001
         print(f"error: {exc}", file=sys.stderr)
         return 1

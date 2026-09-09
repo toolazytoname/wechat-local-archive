@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import sqlite3
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from typing import Any, Iterable
 
 from wechat_export import PARSER_VERSION
 from wechat_export.content import decode_message_content, normalize_local_type
+from wechat_export.preview import classify_payload
 from wechat_export.models import MessageRecord
 from wechat_export.schema import connect_ro, list_tables, map_contact_schema, map_message_schema, msg_table_name
 
@@ -79,12 +81,14 @@ def iter_messages(
     display_timezone: str,
     contacts: dict[str, dict[str, Any]],
     self_usernames: set[str],
+    skipped: list[dict[str, Any]] | None = None,
 ) -> Iterable[MessageRecord]:
     conn = connect_ro(message_db)
     try:
         schema = map_message_schema(conn)
         name2id = load_name2id(conn)
         rel = message_db.name
+        skipped = skipped if skipped is not None else []
         for table in schema["message_tables"]:
             username_guess = None
             # reverse map: table may correspond to md5(username)
@@ -95,6 +99,7 @@ def iter_messages(
             cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')]
             colset = {c.lower() for c in cols}
             if "message_content" not in colset or "create_time" not in colset:
+                skipped.append({"path": rel, "table": table, "status": "skipped_incompatible_schema"})
                 continue
             rows = conn.execute(f'SELECT rowid AS _rowid, * FROM "{table}" ORDER BY create_time, local_id').fetchall()
             for row in rows:
@@ -109,8 +114,26 @@ def iter_messages(
                 conv_type = "room" if str(conversation_id).endswith("@chatroom") or conv.get("is_chatroom") else "private"
                 real_type, type_name = normalize_local_type(d.get("local_type"))
                 text, raw_b64, notes = decode_message_content(d.get("message_content"), d.get("wcdb_ct_message_content"))
+                classified = classify_payload(text, type_name)
+                attachments: list[dict[str, Any]] = []
+                parse_status = "ok"
                 if raw_b64:
-                    notes.append("raw_b64_kept")
+                    digest = next((n.split(":", 1)[1] for n in notes if n.startswith("not_utf8_sha256:")), "")
+                    if not digest:
+                        digest = hashlib.sha256(base64.b64decode(raw_b64)).hexdigest()
+                    attachments.append(
+                        {
+                            "encoding": "base64",
+                            "data": raw_b64,
+                            "sha256": digest,
+                        }
+                    )
+                    notes.append("raw_bytes_preserved")
+                    parse_status = "partial"
+                if "zstd_failed" in "".join(notes):
+                    parse_status = "partial"
+                if not classified["readable"] and classified["media_kind"] == "unknown":
+                    parse_status = "partial" if parse_status == "ok" else parse_status
                 ts = d.get("create_time")
                 ts_utc = None
                 unit = None
@@ -157,16 +180,19 @@ def iter_messages(
                     display_timezone=display_timezone,
                     message_type_raw=int(d["local_type"]) if d.get("local_type") is not None else None,
                     message_type_normalized=type_name,
-                    text=text,
+                    text=classified["body"] if classified["readable"] else text,
                     quoted_record_id=None,
-                    attachment_refs=[{"raw_b64": True}] if raw_b64 else [],
+                    payload_kind=classified["media_kind"],
+                    media_title=classified["title"],
+                    sender_prefix=classified["sender_prefix"],
+                    attachment_refs=attachments,
                     source_kind=source_kind,
                     source_snapshot_id=source_snapshot_id,
                     source_relative_path=rel,
                     source_table=table,
                     source_row_id=str(d.get("_rowid")),
                     parser_version=PARSER_VERSION,
-                    parse_status="ok" if "zstd_failed" not in "".join(notes) else "partial",
+                    parse_status=parse_status,
                     parse_notes=notes,
                 )
                 yield rec

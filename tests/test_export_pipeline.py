@@ -17,15 +17,15 @@ def _cfg(root: Path) -> AppConfig:
         project_root=root,
         data_root=root,
         xwechat_root=root,
-        account_backup_root=root / "shuitaiyang747",
+        account_backup_root=root / "demo_account",
         backup_set="set",
         source_backup2=root / "2",
-        live_account_root=root / "shuitaiyang747_0403",
+        live_account_root=root / "demo_account_0403",
         live_db_root=root / "db",
         display_timezone="America/Los_Angeles",
         keys_path=None,
         config_path=root / "config.json",
-        target_names=("胖龙无限责任一人公司", "阿盼仔"),
+        target_names=("Studio", "Alice"),
     )
 
 
@@ -37,22 +37,22 @@ def _build_dbs(root: Path) -> Path:
     conn.execute(
         "CREATE TABLE contact(id INTEGER PRIMARY KEY, username TEXT, local_type INTEGER, alias TEXT, nick_name TEXT, remark TEXT)"
     )
-    conn.execute("INSERT INTO contact VALUES (1,'wxid_apan',0,'','盼','阿盼仔')")
-    conn.execute("INSERT INTO contact VALUES (2,'wr_group@chatroom',2,'','胖龙无限责任一人公司',NULL)")
-    conn.execute("INSERT INTO contact VALUES (3,'shuitaiyang747',0,'','me',NULL)")
+    conn.execute("INSERT INTO contact VALUES (1,'wxid_alice',0,'','Al','Alice')")
+    conn.execute("INSERT INTO contact VALUES (2,'wr_group@chatroom',2,'','Studio',NULL)")
+    conn.execute("INSERT INTO contact VALUES (3,'demo_account',0,'','me',NULL)")
     conn.execute(
         "CREATE TABLE chat_room(username TEXT PRIMARY KEY, nick_name TEXT)"
     )
-    conn.execute("INSERT INTO chat_room VALUES ('wr_group@chatroom','胖龙无限责任一人公司')")
+    conn.execute("INSERT INTO chat_room VALUES ('wr_group@chatroom','Studio')")
     conn.commit()
     conn.close()
 
     msg = sqlite3.connect(dec / "message" / "message_0.db")
     msg.execute("CREATE TABLE Name2Id(user_name TEXT PRIMARY KEY)")
-    msg.execute("INSERT INTO Name2Id(user_name) VALUES ('shuitaiyang747')")
-    msg.execute("INSERT INTO Name2Id(user_name) VALUES ('wxid_apan')")
+    msg.execute("INSERT INTO Name2Id(user_name) VALUES ('demo_account')")
+    msg.execute("INSERT INTO Name2Id(user_name) VALUES ('wxid_alice')")
     msg.execute("INSERT INTO Name2Id(user_name) VALUES ('other@chatroom')")
-    private = msg_table_name("wxid_apan")
+    private = msg_table_name("wxid_alice")
     room = msg_table_name("wr_group@chatroom")
     ddl = f'''CREATE TABLE {private}(
         local_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,8 +102,8 @@ class ExportPipelineTests(unittest.TestCase):
             conn.execute(
                 "CREATE TABLE contact(id INTEGER PRIMARY KEY, username TEXT, local_type INTEGER, alias TEXT, nick_name TEXT, remark TEXT)"
             )
-            conn.execute("INSERT INTO contact VALUES (1,'wxid_apan',1,'','阿盼仔',NULL)")
-            conn.execute("INSERT INTO contact VALUES (2,'wr_group@chatroom',2,'','胖龙无限责任一人公司',NULL)")
+            conn.execute("INSERT INTO contact VALUES (1,'wxid_alice',1,'','Alice',NULL)")
+            conn.execute("INSERT INTO contact VALUES (2,'wr_group@chatroom',2,'','Studio',NULL)")
             conn.execute(
                 "CREATE TABLE stranger(id INTEGER PRIMARY KEY, username TEXT, local_type INTEGER, alias TEXT, nick_name TEXT, remark TEXT)"
             )
@@ -116,13 +116,13 @@ class ExportPipelineTests(unittest.TestCase):
             self.assertEqual(mapping["contact_table"], "contact")
             self.assertEqual(mapping["chat_room_table"], "chat_room")
             contacts = load_contacts(db)
-            self.assertIn("wxid_apan", contacts)
+            self.assertIn("wxid_alice", contacts)
             self.assertNotIn("wxid_other", contacts)
-            targets = find_targets(contacts, ["胖龙无限责任一人公司", "阿盼仔"])
-            self.assertEqual(len(targets["阿盼仔"]), 1)
-            self.assertEqual(targets["阿盼仔"][0]["username"], "wxid_apan")
-            self.assertEqual(len(targets["胖龙无限责任一人公司"]), 1)
-            self.assertEqual(targets["胖龙无限责任一人公司"][0]["username"], "wr_group@chatroom")
+            targets = find_targets(contacts, ["Studio", "Alice"])
+            self.assertEqual(len(targets["Alice"]), 1)
+            self.assertEqual(targets["Alice"][0]["username"], "wxid_alice")
+            self.assertEqual(len(targets["Studio"]), 1)
+            self.assertEqual(targets["Studio"][0]["username"], "wr_group@chatroom")
 
 
     def test_targets_and_idempotent_export(self) -> None:
@@ -133,28 +133,30 @@ class ExportPipelineTests(unittest.TestCase):
             (cfg.exports_root).mkdir()
             dec = _build_dbs(root)
             records, targets, meta = collect_records(dec, cfg, "live-db", "snap-test")
-            self.assertEqual(len(targets["阿盼仔"]), 1)
-            self.assertEqual(len(targets["胖龙无限责任一人公司"]), 1)
+            self.assertEqual(len(targets["Alice"]), 1)
+            self.assertEqual(len(targets["Studio"]), 1)
             # 5 records: 4 private + 1 group
             self.assertEqual(len(records), 5)
-            texts = [r.text for r in records if r.conversation_id == "wxid_apan" and r.message_type_normalized == "text"]
+            texts = [r.text for r in records if r.conversation_id == "wxid_alice" and r.message_type_normalized == "text"]
             self.assertEqual(texts.count("hello"), 2)
             self.assertIn("压缩文本", [r.text for r in records])
             big = [r for r in records if r.server_message_id == "9223372036854775807"][0]
             self.assertEqual(big.message_type_normalized, "image")
+            self.assertEqual(big.parse_status, "partial")
+            self.assertTrue(big.attachment_refs and big.attachment_refs[0].get("data"))
+            self.assertEqual(big.attachment_refs[0].get("encoding"), "base64")
             out1 = export_records(records, targets, cfg, "run1", source_kind="live-db", backup2_coverage="unverified", extra_notes=["synthetic"])
             n1 = (out1 / "all" / "messages.jsonl").read_text(encoding="utf-8").count("\n")
             out2 = export_records(records, targets, cfg, "run1", source_kind="live-db", backup2_coverage="unverified", extra_notes=["synthetic"])
             n2 = (out2 / "all" / "messages.jsonl").read_text(encoding="utf-8").count("\n")
             self.assertEqual(n1, n2)
             self.assertEqual(n1, 5)
-            tpriv = list((out1 / "targets").glob("阿盼仔/messages.jsonl"))
+            tpriv = list((out1 / "targets").glob("Alice/messages.jsonl"))
             self.assertTrue(tpriv)
             priv_n = tpriv[0].read_text(encoding="utf-8").count("\n")
             self.assertEqual(priv_n, 4)
-            grp = list((out1 / "targets").glob("胖龙无限责任一人公司/messages.jsonl"))
+            grp = list((out1 / "targets").glob("Studio/messages.jsonl"))
             self.assertEqual(grp[0].read_text(encoding="utf-8").count("\n"), 1)
-            # group export is not all of 阿盼仔's group mentions across chats: only that room
             self.assertTrue((out1 / "quality-report.md").exists())
             manifest = (out1 / "manifest.json").read_text(encoding="utf-8")
             self.assertIn("live-db", manifest)
@@ -167,15 +169,18 @@ class ExportPipelineTests(unittest.TestCase):
             self.assertIn("in-group", all_jsonl)
             priv_lines = tpriv[0].read_text(encoding="utf-8").splitlines()
             for line in priv_lines:
-                self.assertIn('"conversation_id": "wxid_apan"', line)
+                self.assertIn('"conversation_id": "wxid_alice"', line)
                 self.assertNotIn('"conversation_id": "wr_group@chatroom"', line)
                 self.assertIn('"source_kind": "live-db"', line)
             grp_lines = grp[0].read_text(encoding="utf-8").splitlines()
             for line in grp_lines:
                 self.assertIn('"conversation_id": "wr_group@chatroom"', line)
-                self.assertNotIn('"conversation_id": "wxid_apan"', line)
+                self.assertNotIn('"conversation_id": "wxid_alice"', line)
             quality = (out1 / "quality-report.md").read_text(encoding="utf-8")
             self.assertIn("backup2_coverage: `unverified`", quality)
+            self.assertIn("selected_source_exported", (out1 / "manifest.json").read_text(encoding="utf-8"))
             self.assertTrue((out1 / "all" / "messages.csv").exists())
-            self.assertTrue(list((out1 / "targets" / "阿盼仔").glob("*.md")))
-            self.assertTrue(list((out1 / "targets" / "胖龙无限责任一人公司").glob("*.md")))
+            self.assertTrue(list((out1 / "targets" / "Alice").glob("*.md")))
+            self.assertTrue(list((out1 / "targets" / "Studio").glob("*.md")))
+            man = (out1 / "manifest.json").read_text(encoding="utf-8")
+            self.assertIn("partial", man)  # binary image is partial, not a fake complete archive

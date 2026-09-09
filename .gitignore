@@ -32,3 +32,4 @@ wiki/
 .env.*
 *.sqlite-wal
 *.sqlite-shm
+examples/**/slices/

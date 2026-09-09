@@ -1,7 +1,11 @@
 {
   "project_root": ".",
   "data_root": "./data",
+  "xwechat_root": "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files",
+  "account": "",
+  "backup_set": "",
+  "live_account": "",
   "display_timezone": "America/Los_Angeles",
-  "target_names": ["Example Room", "Example Friend"],
-  "keys_path": null
+  "keys_path": null,
+  "target_names": []
 }

@@ -24,6 +24,9 @@ class MessageRecord:
     message_type_normalized: str
     text: str | None
     quoted_record_id: str | None
+    payload_kind: str = "text"
+    media_title: str | None = None
+    sender_prefix: str | None = None
     attachment_refs: list[dict[str, Any]] = field(default_factory=list)
     source_kind: str = ""
     source_snapshot_id: str | None = None

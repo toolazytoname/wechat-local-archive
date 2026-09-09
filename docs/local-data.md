@@ -16,4 +16,4 @@ python -m wechat_export index --export-dir data/exports/<run-id>
 python -m wechat_export serve --export-dir data/exports/<run-id>
 ```
 
-The viewer listens on `http://127.0.0.1:8765` only.
+The viewer listens on `http://127.0.0.1:8765` only. `--host 0.0.0.0` is rejected. Use **导出** in the UI to write JSONL/CSV/Markdown slices under `slices/` next to the archive.

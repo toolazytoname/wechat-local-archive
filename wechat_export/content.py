@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from typing import Any
 
 import zstandard
@@ -49,4 +50,5 @@ def decode_message_content(value: Any, compression_flag: Any) -> tuple[str | Non
         return raw.decode("utf-8"), None, notes
     except UnicodeDecodeError:
         notes.append("not_utf8")
+        notes.append(f"not_utf8_sha256:{hashlib.sha256(raw).hexdigest()}")
         return None, base64.b64encode(raw).decode("ascii"), notes

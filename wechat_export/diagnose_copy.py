@@ -23,7 +23,7 @@ from wechat_export.key_capture import (
 )
 
 
-DB_STORAGE_HINT = "shuitaiyang747_0403/db_storage"
+DB_STORAGE_HINT = "db_storage"
 
 
 def _run(cmd: list[str], timeout: float = 8) -> str:

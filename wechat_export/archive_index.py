@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from wechat_export.preview import preview_message
+from wechat_export.preview import classify_payload
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS messages (
   preview TEXT,
   readable INTEGER,
   source_kind TEXT,
-  text TEXT
+  text TEXT,
+  media_kind TEXT,
+  media_title TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv_ts ON messages(conversation_id, timestamp_utc);
 CREATE INDEX IF NOT EXISTS idx_msg_readable ON messages(conversation_id, readable, timestamp_utc);
@@ -104,7 +106,12 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
                 if not line.strip():
                     continue
                 rec = json.loads(line)
-                preview, readable = preview_message(rec.get("text"), rec.get("message_type_normalized") or "unknown")
+                info = classify_payload(rec.get("text"), rec.get("message_type_normalized") or rec.get("payload_kind") or "unknown")
+                if rec.get("payload_kind") and rec["payload_kind"] != "text":
+                    info["media_kind"] = rec["payload_kind"]
+                    if rec.get("media_title"):
+                        info["title"] = rec["media_title"]
+                readable = bool(info["readable"])
                 if readable:
                     readable_n += 1
                 batch.append(
@@ -117,29 +124,38 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
                         1 if rec.get("is_self") else 0,
                         rec.get("timestamp_utc"),
                         rec.get("message_type_normalized"),
-                        preview,
+                        info["preview"],
                         1 if readable else 0,
                         rec.get("source_kind"),
-                        rec.get("text") if readable else None,
+                        info["body"] if readable else None,
+                        info["media_kind"],
+                        info.get("title"),
                     )
                 )
                 n += 1
                 if len(batch) >= 2000:
                     conn.executemany(
-                        "INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         batch,
                     )
                     batch.clear()
         if batch:
             conn.executemany(
-                "INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 batch,
             )
+        tz = "America/Los_Angeles"
+        if manifest.exists():
+            try:
+                tz = json.loads(manifest.read_text(encoding="utf-8")).get("display_timezone") or tz
+            except json.JSONDecodeError:
+                pass
         meta = {
-            "export_dir": str(export_dir),
+            "export_dir": export_dir.name,
             "message_count": str(n),
             "readable_count": str(readable_n),
             "conversation_count": str(len(conv_rows)),
+            "display_timezone": tz,
         }
         if manifest.exists():
             meta["manifest"] = manifest.read_text(encoding="utf-8")

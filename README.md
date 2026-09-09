@@ -1,12 +1,8 @@
 # wechat-local-archive
 
 <p align="center">
-  <img src="docs/seal.svg" width="72" alt="匣" />
-</p>
-
-<p align="center">
-  <strong>Local WeChat archive for macOS.</strong><br />
-  Decrypt your own live database, export structured chats, and read them in a private viewer.
+  <strong>wechat-local-archive</strong><br />
+  Read your own macOS WeChat live-db as a local chat, then export a slice with one click.
 </p>
 
 <p align="center">
@@ -17,7 +13,7 @@
 
 ![Viewer](docs/images/viewer.png)
 
-The screenshot is the **demo fixture** (`examples/demo-export`), not anyone’s real inbox. Your own archive opens the same way, with 只看可读文字 hiding image/voice XML.
+Demo fixture only (`examples/demo-export`). Green/white bubbles, session list, and **导出** are the product surface. XML media becomes cards, not readable text. The server **refuses** any bind except `127.0.0.1`.
 
 ## What it does
 

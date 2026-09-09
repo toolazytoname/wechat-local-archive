@@ -15,7 +15,8 @@ It is **not** a cloud product, not a WeChat client, and not a backup-2 RMFH deco
 ## Hard rules
 
 - Never print, commit, or upload keys, passphrases, memory dumps, or chat bodies from `data/`.
-- Bind the viewer to `127.0.0.1` only.
+- Bind the viewer to `127.0.0.1` only. `validate_bind_host` must reject `0.0.0.0` / `::` before a socket is created. Do not print “loopback only” for other hosts.
+- Viewer DOM: never assign user-controlled strings to `innerHTML`. Use `textContent` / `createElement`. Keep CSP on every response.
 - Do not treat a live-db export as “backup 2 complete”. Keep `backup2_coverage=unverified` until RMFH is actually decoded.
 - Do not disable SIP, re-sign `/Applications/WeChat.app`, or log the user out unless the human explicitly re-authorizes that step.
 - Personal investigation notes (`wiki/`, `HANDOFF.md`, `BLOCKERS.md`, `log.md`) stay local and gitignored.

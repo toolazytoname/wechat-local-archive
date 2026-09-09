@@ -57,6 +57,7 @@ def collect_records(
             db_status.append({"path": db.name, "status": "skipped_index_or_resource"})
             continue
         before = len(records)
+        skipped: list[dict[str, Any]] = []
         records.extend(
             iter_messages(
                 db,
@@ -66,9 +67,14 @@ def collect_records(
                 display_timezone=cfg.display_timezone,
                 contacts=contacts,
                 self_usernames=self_usernames,
+                skipped=skipped,
             )
         )
-        db_status.append({"path": db.name, "status": "ok", "records": len(records) - before})
+        rec = {"path": db.name, "status": "ok", "records": len(records) - before}
+        if skipped:
+            rec["skipped_tables"] = skipped
+            rec["status"] = "partial"
+        db_status.append(rec)
     records.sort(key=sort_key)
     return records, targets, {"contacts": len(contacts), "databases": db_status}
 
@@ -110,13 +116,15 @@ def export_records(
             "exported_records": len(subset),
         }
 
-    export_status = "complete" if records else "blocked"
-    if any(v["ambiguous"] or v["match_count"] == 0 for v in target_export_counts.values()):
-        if export_status == "complete":
+    partial_records = sum(1 for r in records if r.parse_status != "ok")
+    export_status = "blocked" if not records else "selected_source_exported"
+    if partial_records or any(v["ambiguous"] or v["match_count"] == 0 for v in target_export_counts.values()):
+        if export_status == "selected_source_exported":
             export_status = "partial"
-
     notes = list(extra_notes)
     notes.append(f"target_resolution: {target_export_counts}")
+    notes.append("export_status means selected-source records were written, not that every historical payload/media is recovered")
+    notes.append(f"partial_parse_records: {partial_records}")
     report = build_quality_report(
         records,
         source_kind=source_kind,
@@ -125,16 +133,22 @@ def export_records(
         extra_lines=notes,
     )
     write_quality_report(out / "quality-report.md", report)
+    snapshot_id = next((r.source_snapshot_id for r in records if r.source_snapshot_id), None)
     write_manifest(
         out / "manifest.json",
         {
             "run_id": run_id,
             "source_kind": source_kind,
+            "source_snapshot_id": snapshot_id,
             "backup2_coverage": backup2_coverage,
             "export_status": export_status,
+            "export_status_meaning": "selected_source_exported",
             "record_count": len(records),
+            "partial_parse_records": partial_records,
             "targets": target_export_counts,
             "attachment_extraction_complete": False,
+            "parser_version": records[0].parser_version if records else None,
+            "display_timezone": cfg.display_timezone,
         },
     )
     write_json(out / "target-conversations.json", targets)
