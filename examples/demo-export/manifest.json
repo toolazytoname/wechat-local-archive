@@ -1,0 +1,13 @@
+{
+  "source_kind": "live-db",
+  "backup2_coverage": "unverified",
+  "record_count": 4,
+  "targets": {
+    "Alice": {
+      "match_count": 1
+    },
+    "Studio": {
+      "match_count": 1
+    }
+  }
+}

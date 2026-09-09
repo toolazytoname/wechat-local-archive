@@ -1,0 +1,7 @@
+{
+  "project_root": ".",
+  "data_root": "./data",
+  "display_timezone": "America/Los_Angeles",
+  "target_names": ["Example Room", "Example Friend"],
+  "keys_path": null
+}
