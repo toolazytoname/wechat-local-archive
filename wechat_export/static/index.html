@@ -9,14 +9,14 @@
 <body>
   <section id="setup" class="setup hidden">
     <div class="setup-card">
-      <header class="home-header"><span class="home-mark" aria-hidden="true">聊</span><div><p class="eyebrow">微信本地档案 · 只保存在你的电脑</p><h1>找到聊天，留住信息。</h1><p class="hint">看聊天、找资料，或整理一份数据交给 AI。无需重新登录微信。</p></div></header>
+      <header class="home-header"><span class="home-mark" aria-hidden="true">聊</span><div><p class="eyebrow">微信本地档案 · 只保存在你的电脑</p><h1>找到聊天，留住信息。</h1><p class="hint">看聊天、找资料，按需导出并保存。无需重新登录微信。</p></div></header>
       <section class="home-primary" aria-labelledby="home-current-title">
         <p class="eyebrow">从已有记录开始</p><h2 id="home-current-title">正在寻找本地聊天档案…</h2>
         <p id="home-current-meta" class="hint">只检查本地文件，不会上传。</p>
-        <div class="setup-actions"><button type="button" class="export-btn" id="home-open" disabled>打开聊天记录</button><button type="button" id="home-export" disabled>导出给 AI</button></div>
+        <div class="setup-actions"><button type="button" class="export-btn" id="home-open" disabled>打开聊天记录</button><button type="button" id="home-export" disabled>导出数据</button></div>
         <p class="home-caption">已有档案不是实时同步。新消息需要重新读取；图片、文件的可用性以实际附件为准。</p>
       </section>
-      <section class="quick-guide" aria-label="使用步骤"><h2>三步就能导出</h2><ol><li><b>打开聊天</b><span>搜索群名或联系人。</span></li><li><b>选择范围</b><span>一个聊天、多个聊天或全部。</span></li><li><b>保存到本机</b><span>给 AI 选 Markdown / JSONL；用 Excel 选 CSV。</span></li></ol></section>
+      <section class="quick-guide" aria-label="使用步骤"><h2>三步就能导出</h2><ol><li><b>打开聊天</b><span>搜索群名或联系人。</span></li><li><b>选择范围</b><span>一个聊天、多个聊天或全部。</span></li><li><b>保存到本机</b><span>阅读选 Markdown；结构化数据选 JSONL / CSV。</span></li></ol></section>
       <div id="setup-archives-list" class="setup-panel"></div>
       <div class="setup-actions home-secondary"><button type="button" id="setup-archives">刷新档案列表</button><button type="button" id="setup-demo">试用虚构示例</button><button type="button" id="setup-read" aria-controls="setup-read-panel">读取新消息 / 首次导入</button></div>
       <section id="setup-read-panel" class="hidden" aria-labelledby="read-panel-title">
@@ -118,14 +118,14 @@
       <p id="ex-timezone-note" class="hint"></p>
       <label>格式
         <select id="ex-format">
-          <option value="md">Markdown · 给 AI / 自己阅读</option>
+          <option value="md">Markdown · 方便阅读</option>
           <option value="jsonl">JSONL · 完整结构化分析</option>
           <option value="csv">CSV · 用 Excel 打开</option>
           <option value="html">HTML · 双击打开的聊天网页</option>
         </select>
       </label>
-      <label>内容模式 <select id="ex-mode"><option value="analysis">AI 分析版（推荐）：正文、链接与卡片</option><option value="raw">原始资料版：包含内部字段，请勿直接公开</option></select></label>
-      <p class="hint">分析版仍含聊天正文和姓名，不是匿名化；交给外部 AI 前请自行确认隐私。</p>
+      <label>内容模式 <select id="ex-mode"><option value="analysis">易读版（推荐）：正文、链接与卡片</option><option value="raw">原始资料版：包含内部字段，请勿直接公开</option></select></label>
+      <p class="hint">易读版仍含聊天正文和姓名，不是匿名化；分享给他人或外部服务前请确认隐私。</p>
       <label class="readable"><input type="checkbox" id="ex-readable" /> 只导出可读文字（会排除非文字消息）</label>
       <label>消息类型 <select id="ex-type"><option value="">全部类型</option><option value="text">文字</option><option value="image">图片</option><option value="voice">语音</option><option value="video">视频</option><option value="system">系统消息</option></select></label>
       <p id="ex-count" class="hint" role="status" aria-live="polite">数量预览：—</p>

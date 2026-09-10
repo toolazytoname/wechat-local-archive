@@ -158,6 +158,9 @@ function settleMedia(node) {
 
 function mediaCard(msg) {
   const kind = msg.media_kind || "消息";
+  const recovered = msg.attachment;
+  const available = recovered?.status === "available";
+  const mediaURL = `/api/media?uid=${encodeURIComponent(msg.record_uid)}&archive_id=${encodeURIComponent(window.ARCHIVE_ID || "")}`;
   const wrap = el("div", { class: "card media-card" });
   wrap.appendChild(el("div", {}, [msg.preview || `[${kind}]`]));
   let card = null;
@@ -178,7 +181,7 @@ function mediaCard(msg) {
       ]));
     } else if (card.kind === "file") {
       wrap.appendChild(el("div", { class: "hint" }, [
-        `${card.extension || "文件"}${card.size_bytes != null ? " · " + card.size_bytes + " 字节" : ""} · 本次未导出文件内容`,
+        `${card.extension || "文件"}${card.size_bytes != null ? " · " + card.size_bytes + " 字节" : ""}${available ? " · 文件已保存到本机" : " · 尚未取得本地文件"}`,
       ]));
     } else if (card.kind === "link") {
       if (card.description) wrap.appendChild(el("p", {}, [card.description]));
@@ -203,15 +206,23 @@ function mediaCard(msg) {
       }
     }
   }
-  if (kind === "image") {
+  if (available) {
+    const actions = el("div", {class:"attachment-actions"});
+    if (recovered.mime?.startsWith("image/")) actions.appendChild(el("a", {href:mediaURL,target:"_blank",rel:"noopener noreferrer"}, ["查看大图"]));
+    actions.appendChild(el("a", {href:mediaURL+"&download=1",download:recovered.filename || "attachment"}, [kind === "file" ? "下载文件" : "保存到本机"]));
+    wrap.appendChild(actions);
+    wrap.appendChild(el("div", {class:"hint"}, [recovered.representation === "preview" ? "预览图 · 原始图片或视频尚未恢复" : recovered.representation === "original_verified" ? "原文件已校验" : "已找到本地文件"]));
+  }
+  if (kind === "image" || (kind === "video" && available && recovered.mime?.startsWith("image/"))) {
     const img = el("img", {
       class: "media-thumb",
+      loading: "lazy",
       alt: msg.media_title || "图片",
       src: `/api/media?uid=${encodeURIComponent(msg.record_uid)}&archive_id=${encodeURIComponent(window.ARCHIVE_ID || "")}`,
     });
     settleMedia(img);
     img.addEventListener("error", () => {
-      img.replaceWith(el("div", { class: "hint" }, ["图片未取得"]));
+      img.replaceWith(el("div", { class: "hint" }, [recovered?.status === "missing" ? "本机没有找到可读取的图片；可能只剩加密原件" : "图片暂时无法显示"]));
     });
     wrap.appendChild(img);
   } else if (kind === "voice") {

@@ -7,7 +7,7 @@ import html
 from typing import Any
 
 _TITLE = re.compile(r"<title>\s*(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))\s*</title>", re.I | re.S)
-PRESENTATION_VERSION = "5"
+PRESENTATION_VERSION = "6"
 _XML_START = re.compile(r"^(?:<\?xml\b|<!\s*(?:DOCTYPE|ENTITY)\b|<!\[CDATA\[|<!--|<[A-Za-z_][\w:.-]*(?:[\s/>]))", re.I)
 _ENVELOPE = re.compile(r"^([^\n\r:<]{1,80}):\r?\n", re.M)
 _MD5 = re.compile(r'\bmd5="([0-9a-fA-F]{32})"', re.I)

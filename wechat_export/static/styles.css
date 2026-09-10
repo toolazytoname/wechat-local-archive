@@ -295,3 +295,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   #setup-read-panel { padding: 16px; }
   .home-primary .setup-actions { display: grid; grid-template-columns: 1fr; }
 }
+
+.attachment-actions { display: flex; gap: 14px; flex-wrap: wrap; padding-top: 6px; }
+.attachment-actions a { color: #237837; font-size: 13px; text-decoration: none; border-bottom: 1px solid #a4cba6; padding: 4px 0; }
+.attachment-actions a:focus-visible { outline: 2px solid #238a3c; outline-offset: 3px; }

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from wechat_export.archive_index import ensure_index_current, build_index, default_index_path
 from wechat_export.compatibility import evaluate_environment
@@ -320,6 +320,10 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
             self._send_json(describe_state(job))
             return
         binding = self._require_archive(q)
+        if path == "/api/attachment":
+            from wechat_export.recovered_media import attachment, public_attachment
+            self._send_json(public_attachment(attachment(binding.root, (q.get("uid") or [""])[0])))
+            return
         if path == "/api/media":
             self._serve_media(q, binding)
             return
@@ -580,6 +584,10 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
                 tuple(params + [first["timestamp_utc"], first["record_uid"]]),
             ).fetchone()[0]
             has_older = int(older_n) > 0
+        from wechat_export.recovered_media import attachment, public_attachment
+        for message in rows:
+            recovered = attachment(self.bound_request.root, message['record_uid'])
+            if recovered is not None: message['attachment'] = public_attachment(recovered)
         self._send_json(
             {
                 "total": int(total),
@@ -614,6 +622,29 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         uid = (q.get("uid") or [""])[0]
         if not uid:
             self._send_json({"error": "not found", "code": "not_found"}, 404)
+            return
+        from wechat_export.recovered_media import attachment, verified_object
+        recovered = attachment(binding.root, uid)
+        if recovered is not None:
+            if recovered['status'] != 'available':
+                self._send_json({"code":"media_missing","status":recovered['status']},404)
+                return
+            with verified_object(binding.root, recovered) as (stream, size):
+                binding.verify()
+                header = None if self.headers.get("If-Range") else self.headers.get("Range")
+                try: start,end,partial = byte_range(header,size)
+                except UnsatisfiableRange:
+                    self.send_response(416);self.send_header("Content-Range",f"bytes */{size}");self.send_header("Content-Length","0");self.end_headers();return
+                self.send_response(206 if partial else 200)
+                self.send_header("Content-Type", recovered['mime'])
+                self.send_header("Content-Length",str(end-start));self.send_header("Accept-Ranges","bytes")
+                if partial:self.send_header("Content-Range",f"bytes {start}-{end-1}/{size}")
+                download = recovered['kind']=='file' or (q.get('download') or [''])[0]=='1'
+                disposition='attachment' if download else 'inline'
+                self.send_header("Content-Disposition", disposition+"; filename*=UTF-8''"+quote(recovered['filename'],safe=''))
+                self.end_headers()
+                try:copy_range(stream,self.wfile,start,end)
+                except (OSError,EOFError):self.close_connection=True
             return
         conn = self._db(binding)
         try:

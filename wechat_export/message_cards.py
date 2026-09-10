@@ -57,7 +57,11 @@ def card_details(body):
                 'title':title,'items':items,'item_count':total if nested is not None else None,
                 'truncated':total>MAX_CARD_ITEMS}
     attach=app.find('appattach')
-    if attach is not None and (attach.find('fileext') is not None or attach.find('totallen') is not None):
+    app_type = field(app, 'type', 16)
+    # Many webpage/mini-program messages carry an empty appattach scaffold.
+    # It is not a file merely because totallen/fileext elements exist.
+    file_hint = attach is not None and bool(field(attach, 'fileext', 16)) and (field(attach, 'totallen', 24) or '0') != '0'
+    if attach is not None and (app_type == '6' or (app_type is None and file_hint)):
         ext=field(attach,'fileext',16)
         if ext and not re.fullmatch(r'[A-Za-z0-9]{1,16}',ext):ext=None
         length=field(attach,'totallen',24)

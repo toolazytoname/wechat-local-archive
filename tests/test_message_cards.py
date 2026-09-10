@@ -71,3 +71,9 @@ class MessageCardTests(unittest.TestCase):
     def test_nested_structured_quote_never_flattens_secret(self):
         xml='<msg><appmsg><title>reply</title><refermsg><content><msg><aeskey>SECRET</aeskey></msg></content></refermsg></appmsg></msg>'
         self.assertNotIn('SECRET',json.dumps(analysis_record(self.raw(xml))))
+
+    def test_empty_attachment_on_webpage_is_not_a_file(self):
+        xml='<msg><appmsg><type>5</type><title>Article</title><url>https://example.org/article</url><appattach><totallen>0</totallen><fileext/></appattach></appmsg></msg>'
+        card=analysis_record(self.raw(xml))['card']
+        self.assertEqual(card['kind'],'link')
+        self.assertEqual(card['url'],'https://example.org/article')

@@ -7,6 +7,8 @@ SOURCE_FILES = {
     'attachment_ledger_sha256': 'attachment-ledger.jsonl',
     'coverage_sha256': 'coverage.json',
     'coverage_markdown_sha256': 'coverage.md',
+    'recovered_media_index_sha256': 'media/index.sqlite',
+    'recovered_media_report_sha256': 'media/recovery-report.json',
 }
 
 

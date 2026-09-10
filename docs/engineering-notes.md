@@ -57,3 +57,7 @@ Bundle ID不变时，副本仍可能访问同一账号数据。先保全与idle�
 - `docs/consumer-delivery.md`：本次交付边界与证据。
 - `docs/mac-guided-export-plan.md`：历史完整范围，不是当前状态清单。
 - `docs/link-restoration-delivery.md`：链接、安全导出与附件区别。
+
+## 9. 本地附件不是消息占位文本
+
+附件恢复要区分内容摘要与资源名。按会话+服务器消息ID从同快照资源库关联，比全盘搜同名文件可靠；文件再核验内容MD5。可读缩略图可展示，但不能称为原图。恢复库和报告加入档案绑定，二进制流式读取前校验摘要，文件强制下载。详见 [local-attachments.md](local-attachments.md)。产品统一使用“导出数据”“易读版”，不把特定后续用途写成默认定位。
