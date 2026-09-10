@@ -37,6 +37,9 @@ from wechat_export.http_security import (
     new_session_token,
 )
 from wechat_export.archive_binding import ArchiveBinding, ArchiveBindingError
+from wechat_export.insights.store import InsightsError
+from wechat_export.insights_routes import handle_get as handle_insights_get
+from wechat_export.insights_routes import handle_write as handle_insights_write
 from wechat_export.jobs import JobStore
 from wechat_export.loopback import LOOPBACK_HOST, allowed_request_host, validate_bind_host
 from wechat_export.media_resolve import resolve_media_file, sniff_media
@@ -187,6 +190,10 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         if isinstance(exc, QueryError):
             self._send_json({"error": str(exc), "code": exc.code}, 400)
             return
+        if isinstance(exc, InsightsError):
+            status = 404 if exc.code == "not_found" else 409 if exc.code in {"revision_conflict", "migration_in_progress"} else 400
+            self._send_json({"error": str(exc), "code": exc.code}, status)
+            return
         if isinstance(exc, FileNotFoundError):
             self._send_json({"error": "not found", "code": "not_found"}, 404)
             return
@@ -262,6 +269,9 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._send_error_json(exc)
 
+    def do_PATCH(self) -> None:  # noqa: N802
+        self.do_POST()
+
     def _api_get(self, path: str, q: dict[str, list[str]]) -> None:
         if path == '/api/setup/output-locations':
             self._send_json({'locations': OutputLocations(self.ctx.runtime).list()})
@@ -320,6 +330,8 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
             self._send_json(describe_state(job))
             return
         binding = self._require_archive(q)
+        if handle_insights_get(self, path, q):
+            return
         if path == "/api/attachment":
             from wechat_export.recovered_media import attachment, public_attachment
             self._send_json(public_attachment(attachment(binding.root, (q.get("uid") or [""])[0])))
@@ -373,6 +385,8 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
             conn.close()
 
     def _api_post(self, path: str, body: dict[str, Any]) -> None:
+        if handle_insights_write(self, "POST" if not self.command == "PATCH" else "PATCH", path, body):
+            return
         if path == '/api/setup/storage-plan':
             from wechat_export.discovery import resolve_account_dir
             from wechat_export.storage_plan import estimate_storage

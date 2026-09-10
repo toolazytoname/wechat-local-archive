@@ -25,12 +25,15 @@ function setupEl(tag, attrs, children) {
 function showSetup() {
   window.archiveUI?.close(false);
   document.getElementById("setup").classList.remove("hidden");
+  document.getElementById("product")?.classList.add("hidden");
   document.getElementById("archive").classList.add("hidden");
 }
 
 function hideSetup() {
   document.getElementById("setup").classList.add("hidden");
+  document.getElementById("product")?.classList.remove("hidden");
   document.getElementById("archive").classList.remove("hidden");
+  if (window.showProductPage) window.showProductPage("chat");
 }
 
 function renderStages(compat) {

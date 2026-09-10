@@ -17,7 +17,7 @@ const $ = (id) => document.getElementById(id);
 
 async function api(path, opts = {}) {
   const headers = Object.assign({}, opts.headers || {});
-  const archiveScoped = /^\/api\/(meta|conversations|messages|search|export)([/?]|$)/.test(path);
+  const archiveScoped = /^\/api\/(meta|conversations|messages|search|export|insights|profiles|learning)([/?]|$)/.test(path);
   const requestArchive = window.ARCHIVE_ID;
   if (archiveScoped && requestArchive) headers["X-Archive-ID"] = requestArchive;
   if (window.CSRF) headers["X-CSRF-Token"] = window.CSRF;
@@ -414,6 +414,7 @@ async function startArchive() {
 }
 
 window.startArchive = startArchive;
+window.openConvo = openConvo;
 
 function selectedIds() {
   const scope = $("ex-scope").value;

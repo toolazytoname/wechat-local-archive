@@ -176,7 +176,7 @@ from wechat_export.archive_index import build_index
 from wechat_export.export_service import QuerySpec, write_slice
 package = pathlib.Path(wechat_export.__file__).resolve().parent
 assert pathlib.Path(sys.prefix).resolve() in package.parents
-for name in ('index.html','styles.css','app.js','setup.js','interactions.js'):
+for name in ('index.html','styles.css','app.js','setup.js','interactions.js','profiles.js','learning.js','shell.js'):
     assert (package/'static'/name).is_file(), name
 assert not read_registry().get('invalid')
 root = demo_export_dir()

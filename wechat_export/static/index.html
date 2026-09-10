@@ -66,7 +66,21 @@
       <p id="setup-status" class="hint" role="status" aria-live="polite"></p>
     </div>
   </section>
-  <div class="app hidden" id="archive">
+  <div id="product" class="product hidden">
+    <aside class="product-nav" aria-label="主导航">
+      <div class="brand"><b>聊</b><span>微信聊天档案</span></div>
+      <nav>
+        <button type="button" class="nav-btn active" data-page="chat" aria-current="page"><span class="icon" aria-hidden="true">▤</span><span class="label">聊天档案</span></button>
+        <button type="button" class="nav-btn" data-page="self"><span class="icon" aria-hidden="true">◎</span><span class="label">我的画像</span></button>
+        <button type="button" class="nav-btn" data-page="friend"><span class="icon" aria-hidden="true">◉</span><span class="label">好友画像</span></button>
+        <button type="button" class="nav-btn" data-page="learning"><span class="icon" aria-hidden="true">▧</span><span class="label">稍后读</span></button>
+        <button type="button" class="nav-btn" id="nav-export"><span class="icon" aria-hidden="true">↗</span><span class="label">导出数据</span></button>
+      </nav>
+      <div class="nav-bottom"><span class="status-dot"></span>资料默认保存在本机<button type="button" class="link tiny" data-page="settings">档案与设置</button></div>
+    </aside>
+    <div class="product-workspace">
+      <header class="product-topbar"><span id="scope-bar"><span class="status-dot"></span>本地档案</span><button type="button" class="small" id="open-identity">我是谁 / 会话用途</button></header>
+  <div class="app" id="archive">
     <aside class="rail" id="rail" aria-label="会话列表">
       <header class="rail-head">
         <button type="button" class="back" id="close-rail">返回</button>
@@ -97,6 +111,13 @@
         <input id="msg-q" aria-label="搜索消息" type="search" placeholder="搜索消息" autocomplete="off" />
       </footer>
     </main>
+  </div>
+  <section id="panel-self" class="panel hidden" data-page-panel="self"></section>
+  <section id="panel-friend" class="panel hidden" data-page-panel="friend"></section>
+  <section id="panel-learning" class="panel hidden" data-page-panel="learning"></section>
+  <section id="panel-reader" class="panel hidden" data-page-panel="reader"></section>
+  <section id="panel-settings" class="panel hidden" data-page-panel="settings"></section>
+    </div>
   </div>
   <aside class="drawer hidden" id="drawer" role="dialog" aria-modal="true" aria-labelledby="export-title" aria-describedby="export-description">
     <div class="drawer-card">
@@ -142,5 +163,8 @@
   <script src="/interactions.js"></script>
   <script src="/setup.js"></script>
   <script src="/app.js"></script>
+  <script src="/shell.js"></script>
+  <script src="/profiles.js"></script>
+  <script src="/learning.js"></script>
 </body>
 </html>

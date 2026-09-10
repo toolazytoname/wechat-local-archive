@@ -30,9 +30,9 @@ class ConfigPrivacyTests(unittest.TestCase):
         self.assertTrue((static / "app.js").is_file())
         self.assertTrue((static / "setup.js").is_file())
         self.assertTrue((static / "styles.css").is_file())
-        for name in ("app.js", "setup.js"):
-            js = (static / name).read_text(encoding="utf-8")
-            self.assertNotIn("innerHTML", js)
+        for path in static.glob("*.js"):
+            js = path.read_text(encoding="utf-8")
+            self.assertNotIn("innerHTML", js, path.name)
 
     def test_relative_paths_resolve_from_config_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
