@@ -48,3 +48,9 @@ ZIP不含`raw-local-only/`；它只在本机目录里保留完整原始记录。
 - 所有内容仍留在本机；退出工具不会退出微信登录或删除聊天。
 
 开发者安装与依赖说明见`install-guide.md`，维护经验见`engineering-notes.md`。
+
+## 带附件的新版资料
+
+带附件批量包的 `media/objects/` 内有真正的图片、视频和文件，不只是描述。完整解压 ZIP 后，再打开 `analysis/chunks/` 下的 Markdown；支持 Markdown 的阅读器可直接显示图片，附件链接指向包内文件。程序处理时，`local_attachment.relative_path` 是相对于整个资料包根目录的路径。
+
+预览图仍会标注预览；尚未解密或没有本地文件的消息仍保留缺失状态。新版目录与旧版分开保存，不覆盖原始资料。普通页面文字导出并不自动等于带附件 ZIP。
