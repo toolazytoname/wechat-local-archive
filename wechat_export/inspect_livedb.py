@@ -15,7 +15,8 @@ def inspect_livedb(root: Path) -> dict[str, Any]:
             continue
         wal = Path(str(path) + "-wal")
         shm = Path(str(path) + "-shm")
-        head = path.read_bytes()[:16]
+        with path.open("rb") as stream:
+            head = stream.read(16)
         rec = {
             "path": path.relative_to(root).as_posix(),
             "size": path.stat().st_size,

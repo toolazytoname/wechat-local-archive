@@ -21,7 +21,8 @@ def probe_account_passphrases(cfg: AppConfig, rel_db: str = "message/weclaw.db")
     work = ensure_dir(cfg.work_root / "passphrase-probe")
     dst = work / src.name
     shutil.copy2(src, dst)
-    page = dst.read_bytes()[:4096]
+    with dst.open("rb") as stream:
+        page = stream.read(4096)
     salt = page[:16]
     candidates = []
     account = cfg.live_account_root.name

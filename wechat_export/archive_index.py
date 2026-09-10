@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-from wechat_export.preview import classify_payload
+from wechat_export.export_service import timestamp_utc_to_ms
+from wechat_export.fsutil import sha256_file
+from wechat_export.archive_files import source_paths as archive_source_paths
+from wechat_export.preview import record_presentation, PRESENTATION_VERSION
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -31,17 +35,24 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_display_name TEXT,
   is_self INTEGER,
   timestamp_utc TEXT,
+  timestamp_ms INTEGER,
   message_type TEXT,
   preview TEXT,
   readable INTEGER,
   source_kind TEXT,
   text TEXT,
   media_kind TEXT,
-  media_title TEXT
+  media_title TEXT,
+  media_md5 TEXT,
+  duration_ms INTEGER,
+  card_json TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_msg_conv_ts ON messages(conversation_id, timestamp_utc);
+CREATE INDEX IF NOT EXISTS idx_msg_conv_ts ON messages(conversation_id, timestamp_utc, record_uid);
 CREATE INDEX IF NOT EXISTS idx_msg_readable ON messages(conversation_id, readable, timestamp_utc);
+CREATE INDEX IF NOT EXISTS idx_msg_ts_ms ON messages(conversation_id, timestamp_ms);
 """
+
+INSERT_SQL = "INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 
 
 def default_index_path(export_dir: Path) -> Path:
@@ -57,6 +68,14 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, Any]:
+    from wechat_export.scratch import ScratchSpace
+    index_path = index_path or default_index_path(export_dir)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with ScratchSpace(index_path.parent, "archive-index") as temporary:
+        return _build_index(export_dir, index_path, temporary.payload / 'index.sqlite')
+
+
+def _build_index(export_dir: Path, index_path: Path, building: Path) -> dict[str, Any]:
     export_dir = export_dir.resolve()
     index_path = index_path or default_index_path(export_dir)
     messages = export_dir / "all" / "messages.jsonl"
@@ -65,14 +84,9 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
     if not messages.exists():
         raise FileNotFoundError(f"missing {messages}")
 
-    if index_path.exists():
-        index_path.unlink()
-    wal = Path(str(index_path) + "-wal")
-    shm = Path(str(index_path) + "-shm")
-    wal.unlink(missing_ok=True)
-    shm.unlink(missing_ok=True)
-
-    conn = _connect(index_path)
+    source_paths = archive_source_paths(export_dir)
+    source_hashes = {key: sha256_file(path) if path.is_file() else "absent" for key, path in source_paths.items()}
+    conn = _connect(building)
     try:
         conn.executescript(SCHEMA)
         conv_rows = []
@@ -106,11 +120,7 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
                 if not line.strip():
                     continue
                 rec = json.loads(line)
-                info = classify_payload(rec.get("text"), rec.get("message_type_normalized") or rec.get("payload_kind") or "unknown")
-                if rec.get("payload_kind") and rec["payload_kind"] != "text":
-                    info["media_kind"] = rec["payload_kind"]
-                    if rec.get("media_title"):
-                        info["title"] = rec["media_title"]
+                info = record_presentation(rec)
                 readable = bool(info["readable"])
                 if readable:
                     readable_n += 1
@@ -123,6 +133,7 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
                         rec.get("sender_display_name"),
                         1 if rec.get("is_self") else 0,
                         rec.get("timestamp_utc"),
+                        timestamp_utc_to_ms(rec.get("timestamp_utc")),
                         rec.get("message_type_normalized"),
                         info["preview"],
                         1 if readable else 0,
@@ -130,20 +141,17 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
                         info["body"] if readable else None,
                         info["media_kind"],
                         info.get("title"),
+                        info.get("md5"),
+                        info.get("duration_ms"),
+                        json.dumps(info.get("card"), ensure_ascii=False) if info.get("card") else None,
                     )
                 )
                 n += 1
                 if len(batch) >= 2000:
-                    conn.executemany(
-                        "INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        batch,
-                    )
+                    conn.executemany(INSERT_SQL, batch)
                     batch.clear()
         if batch:
-            conn.executemany(
-                "INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                batch,
-            )
+            conn.executemany(INSERT_SQL, batch)
         tz = "America/Los_Angeles"
         if manifest.exists():
             try:
@@ -151,6 +159,8 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
             except json.JSONDecodeError:
                 pass
         meta = {
+            **source_hashes,
+            "presentation_version": PRESENTATION_VERSION,
             "export_dir": export_dir.name,
             "message_count": str(n),
             "readable_count": str(readable_n),
@@ -161,11 +171,49 @@ def build_index(export_dir: Path, index_path: Path | None = None) -> dict[str, A
             meta["manifest"] = manifest.read_text(encoding="utf-8")
         conn.executemany("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", list(meta.items()))
         conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+        if source_hashes != {key: sha256_file(path) if path.is_file() else "absent" for key, path in source_paths.items()}:
+            raise ValueError("Canonical source changed during index construction")
+        wal = Path(str(index_path) + "-wal")
+        if wal.exists() and wal.stat().st_size:
+            raise ValueError("Existing index has pending writes; refusing to replace it")
+        building.chmod(0o600)
+        os.replace(building, index_path)
+        Path(str(building) + "-wal").unlink(missing_ok=True)
+        Path(str(building) + "-shm").unlink(missing_ok=True)
         return {
             "index_path": str(index_path),
             "message_count": n,
             "readable_count": readable_n,
             "conversation_count": len(conv_rows),
         }
-    finally:
+    except Exception:
         conn.close()
+        building.unlink(missing_ok=True)
+        Path(str(building) + "-wal").unlink(missing_ok=True)
+        Path(str(building) + "-shm").unlink(missing_ok=True)
+        raise
+
+
+def ensure_index_current(export_dir: Path) -> Path:
+    """Refresh derived presentation without touching canonical JSONL or source DBs."""
+    import fcntl
+    index = default_index_path(export_dir)
+    with (export_dir / ".presentation-index.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if index.is_file():
+            conn = None
+            try:
+                conn = sqlite3.connect(index.resolve().as_uri() + "?mode=ro", uri=True)
+                values = dict(conn.execute("SELECT key,value FROM meta"))
+                paths = archive_source_paths(export_dir)
+                if values.get("presentation_version") == PRESENTATION_VERSION and all(values.get(key) == (sha256_file(path) if path.is_file() else "absent") for key,path in paths.items()):
+                    return index
+            except sqlite3.Error:
+                pass
+            finally:
+                if conn is not None:
+                    conn.close()
+        build_index(export_dir, index)
+        return index

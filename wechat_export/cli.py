@@ -125,20 +125,51 @@ def cmd_export(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "blocked", "reason": "key_access_blocked", "source_kind": None}, indent=2))
         return 3
     run_id = args.run_id or make_snapshot_id(tz_name=cfg.display_timezone)
-    records, targets, meta = collect_records(Path(args.decrypted_root), cfg, "live-db", args.snapshot_id)
-    if args.conversation_id:
-        records = [r for r in records if r.conversation_id == args.conversation_id]
-    out = export_records(
-        records,
-        targets,
-        cfg,
-        run_id,
-        source_kind="live-db",
-        backup2_coverage="unverified",
-        extra_notes=["export from decrypted live-db copies", f"meta={meta}"],
-    )
-    print(json.dumps({"status": "ok", "run_id": run_id, "out": str(out), "record_count": len(records), "source_kind": "live-db", "backup2_coverage": "unverified"}, indent=2))
-    return 0
+    from wechat_export.scratch import ScratchSpace
+    from dataclasses import replace
+    from wechat_export.record_store import RecordStore
+    if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+        raise ValueError("invalid run_id")
+    final = cfg.exports_root / run_id
+    if final.exists():
+        raise FileExistsError("refusing to overwrite an existing export")
+    ensure_dir(cfg.work_root)
+    with ScratchSpace(cfg.work_root, "cli-normalization") as temporary:
+        records = RecordStore(temporary.payload / "records.sqlite")
+        try:
+            records, targets, meta = collect_records(Path(args.decrypted_root), cfg, "live-db", args.snapshot_id, record_store=records)
+            if args.conversation_id:
+                records.select_conversation(args.conversation_id)
+            out = export_records(
+                records, targets, replace(cfg, data_root=temporary.payload / "staging"), run_id, source_kind="live-db", backup2_coverage="unverified",
+                extra_notes=["export from decrypted live-db copies", f"meta={meta}"],
+            )
+            from wechat_export.source_ledger import database_accounting
+            from wechat_export.coverage_report import refresh_full_coverage
+            manifest = json.loads((out / 'manifest.json').read_text())
+            manifest['database_accounting'] = database_accounting(meta['databases'], authenticated=False)
+            manifest['records_complete'] = False
+            manifest['recognized_message_tables_complete'] = not args.conversation_id and not any(r.get('skipped_tables') for r in meta['databases'])
+            manifest['records_complete_scope'] = 'operator_supplied_plaintext_not_authenticated_snapshot'
+            manifest['coverage_verified'] = False
+            manifest['attachments_complete'] = False
+            if not manifest['database_accounting']['schema_coverage_complete']:
+                manifest['export_status'] = 'partial'
+            refresh_full_coverage(out, manifest)
+            from wechat_export.fsutil import sha256_file
+            manifest['generated_files'] = {p.relative_to(out).as_posix(): sha256_file(p)
+                                           for p in out.rglob('*')
+                                           if p.is_file() and p != out / 'manifest.json'}
+            write_json(out / 'manifest.json', manifest)
+            ensure_dir(final.parent)
+            if final.exists():
+                raise FileExistsError("refusing to overwrite an existing export")
+            os.rename(out, final)
+            out = final
+            print(json.dumps({"status": "ok", "run_id": run_id, "out": str(out), "record_count": len(records), "source_kind": "live-db", "backup2_coverage": "unverified"}, indent=2))
+            return 0
+        finally:
+            records.close()
 
 
 def cmd_snapshot_livedb(args: argparse.Namespace) -> int:
@@ -207,40 +238,98 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_launch(args: argparse.Namespace) -> int:
+    from wechat_export.archive_index import build_index, default_index_path
+    from wechat_export.archive_server import serve
+    from wechat_export.loopback import BindAddressError, validate_bind_host
+    from wechat_export.runtime import demo_export_dir, pick_loopback_port, resolve_runtime
+
+    try:
+        validate_bind_host(args.host)
+    except BindAddressError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2), file=sys.stderr)
+        return 2
+    runtime = resolve_runtime()
+    try:
+        port = pick_loopback_port(args.port)
+    except OSError as exc:
+        print(json.dumps({"error": str(exc), "code": "port_unavailable"}, indent=2), file=sys.stderr)
+        return 2
+    if port != args.port:
+        print(json.dumps({"warning": "preferred port busy", "using_port": port, "requested": args.port}), file=sys.stderr)
+    export_dir = Path(args.export_dir) if args.export_dir else None
+    if args.demo:
+        export_dir = demo_export_dir()
+        if export_dir is None:
+            print(json.dumps({"error": "demo archive missing"}), file=sys.stderr)
+            return 1
+        index = default_index_path(export_dir)
+        if not index.exists():
+            build_index(export_dir, index)
+    serve(export_dir, host=args.host, port=port, runtime=runtime)
+    return 0
+
+
+def cmd_slice(args: argparse.Namespace) -> int:
+    """CLI and HTTP share the same canonical filter and writer."""
+    import sqlite3
+    from wechat_export.scratch import ScratchSpace
+    from contextlib import closing
+    from wechat_export.archive_binding import ArchiveBinding, ArchiveBindingError
+    from wechat_export.archive_index import ensure_index_current
+    from wechat_export.export_service import QuerySpec, count_messages, count_selection, known_conversation_ids, write_slice
+    root = Path(args.export_dir).expanduser().resolve()
+    index = ensure_index_current(root)
+    binding = ArchiveBinding.capture(root, index)
+    if args.source_revision and args.source_revision != binding.revision:
+        raise ArchiveBindingError("archive_source_changed", "Source differs from the preview. Preview again.")
+    conn = sqlite3.connect(index.as_uri() + "?mode=ro&immutable=1", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        spec = QuerySpec.from_mapping({
+            "scope": {"kind": "all"} if args.all else {"kind": "conversations", "conversation_ids": args.conversation_id},
+            "since": args.since, "until": args.until, "message_types": args.message_type or [],
+            "readable_only": args.readable_only, "format": args.format,
+            "mode": args.mode, "display_timezone": args.timezone,
+        }, known_ids=known_conversation_ids(conn))
+        count = count_messages(conn, spec)
+        binding.verify(strong=True)
+        if args.preview:
+            result = {"count": count, "selection_accounting": count_selection(conn, spec), "query": spec.to_public_dict(),
+                      "source_binding": binding.public()}
+        else:
+            output_root = Path(args.output_root).expanduser() if args.output_root else root / "slices"
+            # A private verified copy also protects the CLI from concurrent source
+            # replacement. Keep published output outside this temporary directory.
+            with ScratchSpace(root, "cli-export-source") as tmp:
+                snapshot = binding.snapshot_to(tmp.payload / "archive")
+                with closing(sqlite3.connect((snapshot / "archive.sqlite").as_uri() +
+                                             "?mode=ro&immutable=1", uri=True)) as frozen:
+                    frozen.row_factory = sqlite3.Row
+                    result = write_slice(frozen, snapshot, spec, source="canonical",
+                                         jobs_root=output_root, expected_count=count,
+                                         source_binding=binding.public(),
+                                         media_probe=__import__("wechat_export.media_audit", fromlist=["MediaProbe"]).MediaProbe.from_archive(root))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_cleanup_scratch(args: argparse.Namespace) -> int:
+    from wechat_export.scratch import sweep
+    report = sweep(Path(args.parent).expanduser(), apply=args.apply,
+                   older_than=args.older_than_hours * 3600)
+    print(json.dumps(report, indent=2))
+    return 1 if report['errors'] else 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     if args.export_dir:
-        man = Path(args.export_dir) / "manifest.json"
-        payload = json.loads(man.read_text(encoding="utf-8"))
-        jsonl = Path(args.export_dir) / "all" / "messages.jsonl"
-        n = 0
-        kinds = set()
-        if jsonl.exists():
-            with jsonl.open(encoding="utf-8") as fh:
-                for line in fh:
-                    if not line.strip():
-                        continue
-                    n += 1
-                    rec = json.loads(line)
-                    kinds.add(rec.get("source_kind"))
-        print(
-            json.dumps(
-                {
-                    "parser_version": PARSER_VERSION,
-                    "source_kind": payload.get("source_kind"),
-                    "backup2_coverage": payload.get("backup2_coverage"),
-                    "export_status": payload.get("export_status"),
-                    "export_status_meaning": payload.get("export_status_meaning"),
-                    "manifest_record_count": payload.get("record_count"),
-                    "jsonl_record_count": n,
-                    "source_kinds_in_jsonl": sorted(k for k in kinds if k),
-                    "counts_match": payload.get("record_count") == n,
-                    "source_snapshot_id": payload.get("source_snapshot_id"),
-                    "live_db_text_decode_complete": payload.get("export_status") in {"selected_source_exported", "partial"},
-                },
-                indent=2,
-            )
-        )
-        return 0 if payload.get("backup2_coverage") == "unverified" else 0
+        from wechat_export.archive_verify import verify_archive
+        result = verify_archive(Path(args.export_dir))
+        print(json.dumps(result, indent=2))
+        return 0 if result["archive_valid"] else 1
     cfg = _cfg(args)
     snap = sorted((cfg.raw_root).glob("*"))
     latest = snap[-1] if snap else None
@@ -266,6 +355,12 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("init-config")
     s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_init_config)
+
+    s = sub.add_parser("cleanup-scratch", help="inspect only registered disposable temp files; dry-run by default")
+    s.add_argument("--parent", required=True, help="parent of the fixed .wla-scratch-v1 namespace, not a deletion target")
+    s.add_argument("--older-than-hours", type=float, default=24)
+    s.add_argument("--apply", action="store_true", help="remove eligible unleased entries; never snapshots/keys/exports")
+    s.set_defaults(func=cmd_cleanup_scratch)
 
     s = sub.add_parser("snapshot")
     s.add_argument("--snapshot-id", default=None)
@@ -305,6 +400,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--snapshot-id", default=None)
     s.set_defaults(func=cmd_export)
 
+    s = sub.add_parser("slice", help="filter a canonical archive with the same semantics as the viewer")
+    s.add_argument("--export-dir", required=True)
+    scope = s.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--all", action="store_true")
+    scope.add_argument("--conversation-id", action="append")
+    s.add_argument("--since")
+    s.add_argument("--until")
+    s.add_argument("--message-type", action="append")
+    s.add_argument("--readable-only", action="store_true")
+    s.add_argument("--format", choices=["jsonl", "csv", "md", "html"], default="jsonl")
+    s.add_argument("--mode", choices=["analysis", "raw"], default="analysis")
+    s.add_argument("--timezone", default="UTC")
+    s.add_argument("--output-root")
+    s.add_argument("--preview", action="store_true")
+    s.add_argument("--source-revision", help="require the source_revision returned by a previous slice --preview")
+    s.set_defaults(func=cmd_slice)
+
     s = sub.add_parser("decrypt")
     s.add_argument("--keys-file", required=True)
     s.add_argument("--src", required=True)
@@ -325,6 +437,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
     s.set_defaults(func=cmd_serve)
+
+    s = sub.add_parser("launch", help="start the local UI without requiring an existing archive")
+    s.add_argument("--export-dir", default=None)
+    s.add_argument("--demo", action="store_true", help="open the synthetic demo archive")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8765)
+    s.set_defaults(func=cmd_launch)
     return p
 
 

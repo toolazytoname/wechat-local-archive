@@ -33,3 +33,13 @@ wiki/
 *.sqlite-wal
 *.sqlite-shm
 examples/**/slices/
+
+# Owned disposable runtime copies; never publish chat-containing scratch data
+**/.wla-scratch-v1/
+**/.wla-scratch-v1.init.lock
+
+# Native-selected private archive roots (also write an internal ignore-all file).
+**/WeChat Local Archives/
+
+# Local derived-index coordination (contains no archive content).
+**/.presentation-index.lock

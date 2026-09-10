@@ -1,6 +1,6 @@
 {
-  "project_root": ".",
-  "data_root": "./data",
+  "project_root": "../..",
+  "data_root": "..",
   "xwechat_root": "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files",
   "account": "",
   "backup_set": "",

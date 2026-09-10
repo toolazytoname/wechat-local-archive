@@ -37,11 +37,13 @@ It is **not** a cloud product, not a WeChat client, and not a backup-2 RMFH deco
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m wechat_export launch
+.venv/bin/python -m wechat_export launch --demo
 .venv/bin/python -m wechat_export index --export-dir examples/demo-export
 .venv/bin/python -m wechat_export serve --export-dir examples/demo-export
 ```
 
-Real archives live under `data/exports/<run-id>` after the operator copies them here.
+`launch` does not require an existing archive. Real archives live under `data/exports/<run-id>` after the operator copies them here. Do not start live-db key capture or a debug WeChat copy unless the human just confirmed that exact step.
 
 ## Tests
 

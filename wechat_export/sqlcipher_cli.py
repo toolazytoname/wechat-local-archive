@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import shutil
+import os
 import subprocess
-import tempfile
+from wechat_export.scratch import ScratchSpace
 from pathlib import Path
 
 from wechat_export.sqlcipher4 import SqlCipherError
@@ -50,7 +51,7 @@ def _key_pragma(*, raw_key: bytes | None, passphrase: bytes | None) -> str:
     raise SqlCipherError("missing key material")
 
 
-def run_sqlcipher(db: Path, script: str, *, binary: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+def run_sqlcipher(db: Path, script: str, *, binary: Path | None = None, timeout: int = 120, lease_fds: tuple[int, ...] = ()) -> subprocess.CompletedProcess[str]:
     exe = binary or find_sqlcipher()
     if exe is None:
         raise SqlCipherError("official sqlcipher CLI not found")
@@ -61,6 +62,7 @@ def run_sqlcipher(db: Path, script: str, *, binary: Path | None = None, timeout:
         text=True,
         timeout=timeout,
         check=False,
+        pass_fds=lease_fds,
     )
 
 
@@ -71,21 +73,26 @@ def export_plaintext(
     raw_key: bytes | None = None,
     passphrase: bytes | None = None,
     binary: Path | None = None,
+    check=lambda: None,
+    scratch_parent: Path | None = None,
 ) -> dict:
     """Open src_db with its sidecar -wal and write a merged plaintext SQLite file.
 
     SQLCipher applies WAL on open. sqlcipher_export copies the logical database,
     including committed WAL frames, into dest_db.
     """
-    if dest_db.exists():
+    check()
+    if dest_db.exists() or dest_db.is_symlink():
         raise SqlCipherError(f"refusing to overwrite {dest_db}")
     dest_db.parent.mkdir(parents=True, exist_ok=True)
     wal = Path(str(src_db) + "-wal")
     shm = Path(str(src_db) + "-shm")
-    # Copy the trio into a temp dir so SQLCipher close/checkpoint cannot
-    # mutate the caller's encrypted snapshot.
-    with tempfile.TemporaryDirectory(prefix="sqlcipher-export-") as td:
-        work = Path(td) / src_db.name
+    # SQLCipher may checkpoint its input and may leave partial output on failure.
+    # Keep both inside owned temporary directories and publish exclusively only
+    # after successful completion/header validation. Staging shares dest's FS.
+    with ScratchSpace(scratch_parent or dest_db.parent, "sqlcipher-export") as temporary:
+        work = temporary.payload / "source.db"
+        plain = temporary.payload / "plain.db"
         shutil.copy2(src_db, work)
         if wal.exists():
             shutil.copy2(wal, Path(str(work) + "-wal"))
@@ -95,25 +102,28 @@ def export_plaintext(
             [
                 _key_pragma(raw_key=raw_key, passphrase=passphrase),
                 "PRAGMA cipher_compatibility = 4;",
-                f"ATTACH DATABASE {_sql_quote(str(dest_db))} AS plain KEY '';",
+                f"ATTACH DATABASE {_sql_quote(str(plain))} AS plain KEY '';",
                 "SELECT sqlcipher_export('plain');",
                 "DETACH DATABASE plain;",
                 ".exit",
             ]
         )
-        proc = run_sqlcipher(work, script, binary=binary)
-    combined = (proc.stdout or "") + (proc.stderr or "")
-    failed = proc.returncode != 0 or "Error" in combined or not dest_db.exists()
-    if not failed:
-        try:
-            if dest_db.read_bytes()[:16] != b"SQLite format 3\x00":
+        check()
+        proc = run_sqlcipher(work, script, binary=binary, lease_fds=temporary.inherit_fds)
+        check()
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        failed = proc.returncode != 0 or "Error" in combined or not plain.exists()
+        if not failed:
+            try:
+                with plain.open("rb") as output:
+                    failed = output.read(16) != b"SQLite format 3\x00"
+            except OSError:
                 failed = True
-        except OSError:
-            failed = True
-    if failed:
-        if dest_db.exists():
-            dest_db.unlink()
-        raise SqlCipherError(f"sqlcipher_export failed for {src_db.name} (exit {proc.returncode})")
+        if failed:
+            raise SqlCipherError(f"sqlcipher_export failed for {src_db.name} (exit {proc.returncode})")
+        os.chmod(plain, 0o600)
+        check()
+        os.link(plain, dest_db)
     return {
         "src": str(src_db),
         "dst": str(dest_db),

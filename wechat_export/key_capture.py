@@ -134,6 +134,8 @@ class LldbSession:
         deadline = time.time() + timeout
         marker = f'script print("{token}")'
         while time.time() < deadline:
+            if getattr(self, "cancelled", None) and self.cancelled():
+                return self.buf[mark:]
             new = self.buf[mark:]
             if marker in new:
                 _head, after = new.split(marker, 1)
@@ -150,6 +152,8 @@ class LldbSession:
         self._write(line)
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if getattr(self, "cancelled", None) and self.cancelled():
+                return self.buf[mark:]
             new = self.buf[mark:]
             lowered = new.lower()
             if _STOPPED.search(new) or _EXITED.search(new):
@@ -276,6 +280,7 @@ def capture_kdf(
     waitfor_name: str | None = None,
     on_waiting: object | None = None,
     extra_symbols: list[str] | None = None,
+    cancelled=None,
 ) -> tuple[CaptureStatus, list[KdfHit]]:
     """Run inferior under LLDB and collect KDF hits. Secrets stay in KdfHit.material."""
     names = [symbol, *(extra_symbols or [])]
@@ -284,6 +289,7 @@ def capture_kdf(
     session: LldbSession | None = None
     try:
         session = LldbSession()
+        session.cancelled = cancelled
         status.session_pids = session.descendant_pids()
         session.cmd("settings set auto-confirm true")
         session.cmd("settings set interpreter.prompt-on-quit false")
@@ -331,6 +337,8 @@ def capture_kdf(
         deadline = time.time() + timeout
         current = launched
         while time.time() < deadline and len(hits) < max_hits:
+            if cancelled and cancelled():
+                break
             if _EXITED.search(current):
                 status.inferior_exited = True
                 break
@@ -401,7 +409,8 @@ def capture_kdf(
 
 def verify_hits_against_db(hits: list[KdfHit], db: Path) -> tuple[bool, int]:
     """HMAC-verify captured passphrase bytes against page 1. Does not mutate CaptureStatus."""
-    page = db.read_bytes()[:4096]
+    with db.open("rb") as stream:
+        page = stream.read(4096)
     if len(page) < 4096:
         return False, 0
     salt = page[:16]

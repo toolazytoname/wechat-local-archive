@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
+from wechat_export.scratch import ScratchSpace
 import sqlite3
 import struct
 from dataclasses import dataclass
@@ -132,6 +134,58 @@ def verify_all_pages(data: bytes, raw_key: bytes, params: SqlCipher4Params = SQL
     return pages
 
 
+def read_prefix(path: Path, size: int = SALT_SIZE) -> bytes:
+    """Bounded header read; never materialize a database to inspect its salt."""
+    with path.open("rb") as stream:
+        return stream.read(size)
+
+
+def _file_stamp(st):
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+def authenticated_pages(src: Path, raw_key: bytes, params: SqlCipher4Params = SQLCIPHER4_DEFAULTS,
+                        *, check=lambda: None):
+    """Yield only authenticated pages, with bounded reads and source-change checks.
+
+    Consumers must exhaust the iterator before publishing any derived output.
+    ``check`` may raise a caller-specific cancellation exception at each page.
+    """
+    check()
+    with src.open("rb") as stream:
+        initial = os.fstat(stream.fileno())
+        size = initial.st_size
+        if size < params.page_size or size % params.page_size:
+            raise TruncatedDatabaseError(f"file size {size} is not a complete page set; refusing to pad")
+        salt = stream.read(SALT_SIZE)
+        if salt == SQLITE_HEADER:
+            raise SqlCipherError("refusing to decrypt plaintext sqlite")
+        stream.seek(0)
+        mac_key = derive_mac_key(raw_key, salt, params)
+        for pgno in range(1, size // params.page_size + 1):
+            check()
+            page = stream.read(params.page_size)
+            if len(page) != params.page_size:
+                raise TruncatedDatabaseError(f"short page {pgno}; refusing to pad")
+            if not hmac.compare_digest(compute_page_hmac(page, mac_key, pgno, params),
+                                       stored_page_hmac(page, params)):
+                raise PageHmacError(f"HMAC failed on page {pgno}", page=pgno)
+            yield pgno, page
+        check()
+        if stream.read(1) or _file_stamp(os.fstat(stream.fileno())) != _file_stamp(initial):
+            raise SqlCipherError("database changed during authentication")
+        if _file_stamp(src.stat()) != _file_stamp(initial):
+            raise SqlCipherError("database replaced during authentication")
+
+
+def verify_database_pages(src: Path, raw_key: bytes, params: SqlCipher4Params = SQLCIPHER4_DEFAULTS,
+                          *, check=lambda: None) -> int:
+    pages = 0
+    for pages, _ in authenticated_pages(src, raw_key, params, check=check):
+        pass
+    return pages
+
+
 def decrypt_page(page: bytes, raw_key: bytes, pgno: int, params: SqlCipher4Params = SQLCIPHER4_DEFAULTS) -> bytes:
     if len(page) != params.page_size:
         raise TruncatedDatabaseError(f"page {pgno} length {len(page)} != {params.page_size}; refusing to pad")
@@ -146,28 +200,34 @@ def decrypt_page(page: bytes, raw_key: bytes, pgno: int, params: SqlCipher4Param
     return decrypted + (b"\x00" * params.reserve)
 
 
-def decrypt_database(src: Path, dst: Path, raw_key: bytes, params: SqlCipher4Params = SQLCIPHER4_DEFAULTS) -> dict:
-    """Decrypt the main database file only. Does not apply WAL.
+def decrypt_database(src: Path, dst: Path, raw_key: bytes, params: SqlCipher4Params = SQLCIPHER4_DEFAULTS,
+                     *, check=lambda: None, scratch_parent: Path | None = None) -> dict:
+    """Stream authenticated main-file pages to private staging; does not apply WAL.
 
     Callers with a non-empty -wal must use sqlcipher_cli.export_plaintext.
+    No final path is published until every page and source stamp is verified.
     """
-    data = src.read_bytes()
-    if data[:16] == SQLITE_HEADER:
-        raise SqlCipherError(f"refusing to decrypt plaintext sqlite: {src}")
-    pages = verify_all_pages(data, raw_key, params)
+    if dst.exists() or dst.is_symlink():
+        raise SqlCipherError("refusing to overwrite decrypted destination")
+    check()
     dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_suffix(dst.suffix + ".tmp")
-    with tmp.open("wb") as out:
-        for pgno in range(1, pages + 1):
-            start = (pgno - 1) * params.page_size
-            out.write(decrypt_page(data[start : start + params.page_size], raw_key, pgno, params))
-    tmp.replace(dst)
-    header = dst.read_bytes()[:16]
-    if header != SQLITE_HEADER:
-        raise SqlCipherError(f"decrypted header is not sqlite: {dst}")
+    pages = 0
+    with ScratchSpace(scratch_parent or dst.parent, "page-decrypt") as temporary:
+        tmp = temporary.payload / 'plain.db'
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as out:
+            for pages, page in authenticated_pages(src, raw_key, params, check=check):
+                out.write(decrypt_page(page, raw_key, pages, params))
+            out.flush()
+            os.fsync(out.fileno())
+        if read_prefix(tmp) != SQLITE_HEADER:
+            raise SqlCipherError("decrypted header is not sqlite")
+        check()
+        # Same-filesystem exclusive publication: never clobber a concurrent job.
+        os.link(tmp, dst)
     return {
         "pages": pages,
-        "bytes_in": len(data),
+        "bytes_in": pages * params.page_size,
         "path": str(dst),
         "wal_applied": False,
         "params_provenance": params.provenance,

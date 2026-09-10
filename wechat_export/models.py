@@ -39,4 +39,5 @@ class MessageRecord:
     parse_notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        from wechat_export.source_ledger import SCHEMA_VERSION
+        return {"schema_version": SCHEMA_VERSION, **asdict(self)}

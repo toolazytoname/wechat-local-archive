@@ -67,6 +67,14 @@ def _as_path(value: str | Path) -> Path:
     return Path(value).expanduser()
 
 
+def resolve_from_config(value: str | Path, config_path: Path) -> Path:
+    """Relative paths are interpreted from the config file directory, not cwd."""
+    path = _as_path(value)
+    if path.is_absolute():
+        return path
+    return (config_path.parent / path).resolve()
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     config_path = _as_path(path or os.environ.get("WECHAT_EXPORT_CONFIG") or DEFAULT_CONFIG_PATH)
     if not config_path.exists():
@@ -74,7 +82,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             f"config not found: {config_path}. Copy config.example.json and set account/live_account."
         )
     raw = json.loads(config_path.read_text(encoding="utf-8"))
-    data_root = _as_path(raw.get("data_root", DEFAULT_DATA_ROOT))
+    data_root = resolve_from_config(raw.get("data_root", ".."), config_path)
     xwechat = _as_path(raw["xwechat_root"]) if raw.get("xwechat_root") else default_xwechat_root()
     account = (raw.get("account") or "").strip()
     backup_set = (raw.get("backup_set") or "").strip()
@@ -83,28 +91,36 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise ConfigError("config missing live_account (and live_account_root); refusing to guess an account id")
     if not raw.get("account_backup_root") and not account:
         raise ConfigError("config missing account (and account_backup_root); refusing to guess an account id")
-    live_account_root = _as_path(raw["live_account_root"]) if raw.get("live_account_root") else xwechat / live_account
+    live_account_root = (
+        resolve_from_config(raw["live_account_root"], config_path)
+        if raw.get("live_account_root")
+        else xwechat / live_account
+    )
     account_backup_root = (
-        _as_path(raw["account_backup_root"]) if raw.get("account_backup_root") else xwechat / "Backup" / account
+        resolve_from_config(raw["account_backup_root"], config_path)
+        if raw.get("account_backup_root")
+        else xwechat / "Backup" / account
     )
     if raw.get("source_backup2"):
-        source_backup2 = _as_path(raw["source_backup2"])
+        source_backup2 = resolve_from_config(raw["source_backup2"], config_path)
     elif account and backup_set:
         source_backup2 = xwechat / "Backup" / account / backup_set / "files" / "2"
     else:
         source_backup2 = account_backup_root / "files" / "2"
     keys = raw.get("keys_path")
     return AppConfig(
-        project_root=_as_path(raw.get("project_root", DEFAULT_PROJECT_ROOT)),
+        project_root=resolve_from_config(raw.get("project_root", "../.."), config_path),
         data_root=data_root,
         xwechat_root=xwechat,
         account_backup_root=account_backup_root,
         backup_set=backup_set,
         source_backup2=source_backup2,
         live_account_root=live_account_root,
-        live_db_root=_as_path(raw["live_db_root"]) if raw.get("live_db_root") else live_account_root / "db_storage",
+        live_db_root=resolve_from_config(raw["live_db_root"], config_path)
+        if raw.get("live_db_root")
+        else live_account_root / "db_storage",
         display_timezone=raw.get("display_timezone", "America/Los_Angeles"),
-        keys_path=_as_path(keys) if keys else None,
+        keys_path=resolve_from_config(keys, config_path) if keys else None,
         config_path=config_path,
         target_names=tuple(raw.get("target_names") or ()),
         account=account,
@@ -114,8 +130,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
 def default_config_payload() -> dict:
     return {
-        "project_root": ".",
-        "data_root": "./data",
+        "project_root": "../..",
+        "data_root": "..",
         "xwechat_root": "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files",
         "account": "",
         "backup_set": "",

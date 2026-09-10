@@ -82,12 +82,13 @@ def iter_messages(
     contacts: dict[str, dict[str, Any]],
     self_usernames: set[str],
     skipped: list[dict[str, Any]] | None = None,
+    source_relative_path: str | None = None,
 ) -> Iterable[MessageRecord]:
     conn = connect_ro(message_db)
     try:
         schema = map_message_schema(conn)
         name2id = load_name2id(conn)
-        rel = message_db.name
+        rel = source_relative_path or message_db.name
         skipped = skipped if skipped is not None else []
         for table in schema["message_tables"]:
             username_guess = None
@@ -98,10 +99,10 @@ def iter_messages(
                     break
             cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')]
             colset = {c.lower() for c in cols}
-            if "message_content" not in colset or "create_time" not in colset:
+            if not {"message_content", "create_time", "local_id"} <= colset:
                 skipped.append({"path": rel, "table": table, "status": "skipped_incompatible_schema"})
                 continue
-            rows = conn.execute(f'SELECT rowid AS _rowid, * FROM "{table}" ORDER BY create_time, local_id').fetchall()
+            rows = conn.execute(f'SELECT rowid AS _rowid, * FROM "{table}" ORDER BY create_time, local_id')
             for row in rows:
                 d = _colmap(row)
                 sender_id = None
@@ -171,7 +172,7 @@ def iter_messages(
                     )
                     if sender_id
                     else None,
-                    is_self=(sender_id in self_usernames) if sender_id else None,
+                    is_self=(sender_id in self_usernames) if sender_id and self_usernames else None,
                     server_message_id=str(server_id) if server_id not in (None,) else None,
                     local_message_id=str(local_id) if local_id is not None else None,
                     timestamp_raw=int(ts) if ts is not None else None,

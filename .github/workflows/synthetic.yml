@@ -1,0 +1,43 @@
+name: Synthetic macOS acceptance
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: synthetic-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Synthetic prerequisites only
+        run: |
+          brew list sqlcipher >/dev/null 2>&1 || brew install sqlcipher
+          xcrun --find lldb
+          python -m pip install .
+      - name: Public release inventory and privacy rules (no private inputs)
+        run: python -m wechat_export.privacy_audit --scope worktree
+      - name: Full synthetic tests (LLDB targets self-built probes, never WeChat)
+        run: python -m unittest discover -s tests -v
+      - name: JavaScript syntax and whitespace
+        run: |
+          node --check wechat_export/static/app.js
+          node --check wechat_export/static/setup.js
+          git diff --check
+      - name: Build wheel and test a separate installed environment
+        run: |
+          python -m pip wheel . --no-deps -w dist
+          python -m venv "$RUNNER_TEMP/wla-installed"
+          "$RUNNER_TEMP/wla-installed/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wla-installed/bin/python" -I "$GITHUB_WORKSPACE/scripts/installed-smoke.py"
+# No artifact uploads, repository secrets, real WeChat installs or runtime archives.

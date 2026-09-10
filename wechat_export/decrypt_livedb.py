@@ -14,7 +14,8 @@ from wechat_export.sqlcipher4 import (
     decrypt_database,
     derive_raw_key,
     sqlite_integrity,
-    verify_all_pages,
+    verify_database_pages,
+    read_prefix,
 )
 from wechat_export.sqlcipher_cli import export_plaintext, find_sqlcipher
 
@@ -54,20 +55,23 @@ def decrypt_one(
     raw_key: bytes | None = None,
     *,
     passphrase: bytes | None = None,
+    check=lambda: None,
+    scratch_parent: Path | None = None,
 ) -> dict[str, Any]:
+    check()
     wal_size = _wal_size(src)
-    data = src.read_bytes()
+    salt = read_prefix(src)
     if raw_key is None:
         if passphrase is None:
             raise SqlCipherError("raw_key or passphrase is required")
-        if len(data) < 16:
+        if len(salt) < 16:
             raise TruncatedDatabaseError(f"{src.name} too small to contain a salt")
-        raw_key = derive_raw_key(passphrase, data[:16])
+        raw_key = derive_raw_key(passphrase, salt)
     # Always authenticate the main file first when it is a complete page set.
     main_pages = None
     main_hmac = None
     try:
-        main_pages = verify_all_pages(data, raw_key)
+        main_pages = verify_database_pages(src, raw_key, check=check) if wal_size else None
         main_hmac = "ok"
     except TruncatedDatabaseError as exc:
         main_hmac = f"truncated:{exc}"
@@ -83,7 +87,8 @@ def decrypt_one(
                 f"{src.name} has WAL {wal_size} bytes; official sqlcipher CLI is required to merge it. "
                 "Refusing to decrypt the main file alone."
             )
-        info = export_plaintext(src, dst, raw_key=raw_key, passphrase=None)
+        check()
+        info = export_plaintext(src, dst, raw_key=raw_key, passphrase=None, check=check, scratch_parent=scratch_parent)
         integ = sqlite_integrity(dst)
         return {
             "path": src.name,
@@ -100,7 +105,7 @@ def decrypt_one(
             **{k: info[k] for k in ("wal_present", "cli") if k in info},
         }
 
-    page_info = decrypt_database(src, dst, raw_key)
+    page_info = decrypt_database(src, dst, raw_key, check=check, scratch_parent=scratch_parent)
     integ = sqlite_integrity(dst)
     return {
         "path": src.name,
