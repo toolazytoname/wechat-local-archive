@@ -151,15 +151,17 @@ class PrivacyAuditTests(unittest.TestCase):
     def test_installed_demo_upgrade_preserves_old_copy(self):
         from wechat_export.runtime import demo_export_dir
         with tempfile.TemporaryDirectory() as td:
-            old = Path(td)/'demo-v2'; old.mkdir()
+            old = Path(td)/'demo-v3'; old.mkdir()
             marker = old/'keep.txt'; marker.write_text('previous synthetic version')
             with patch('wechat_export.runtime.source_checkout_root', return_value=None), patch.dict(
                     'os.environ', {'WECHAT_EXPORT_DATA_ROOT': td}):
                 new = demo_export_dir()
-            self.assertEqual(new.name, 'demo-v3')
+            self.assertEqual(new.name, 'demo-v4')
             self.assertEqual(marker.read_text(), 'previous synthetic version')
             rows = [json.loads(line) for line in (new/'all/messages.jsonl').read_text().splitlines()]
             self.assertTrue(all(row['sender_id'] == 'wxid_alice' for row in rows if row['record_uid'].startswith('card-')))
+            self.assertTrue((new/'media/msg/attach/29a6db07e8bbdb53f5d54cc3c309f3f1/2026-01/Img/ca6e9184bdd5d8dce96b4d2b37355164_t.dat').is_file())
+            self.assertTrue(any('我想每周整理一次阅读笔记' in row.get('text','') for row in rows if row.get('is_self')))
 
     def test_forced_tracked_disposable_plaintext_is_always_private(self):
         path = self.root/'.wla-scratch-v1'

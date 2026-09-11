@@ -117,7 +117,7 @@ def demo_export_dir() -> Path | None:
     if not (bundled / "all/messages.jsonl").is_file():
         return None
     runtime = resolve_runtime()
-    target = runtime.data_root / "demo-v3"
+    target = runtime.data_root / "demo-v4"
     if not target.exists():
         tmp = Path(tempfile.mkdtemp(prefix=".demo-", dir=runtime.data_root))
         try:

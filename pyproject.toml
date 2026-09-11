@@ -22,7 +22,15 @@ build-backend = "setuptools.build_meta"
 include = ["wechat_export*"]
 
 [tool.setuptools.package-data]
-wechat_export = ["compatibility-registry.json", "static/*", "demo/*.json", "demo/all/*.jsonl"]
+wechat_export = [
+  "compatibility-registry.json",
+  "static/*",
+  "demo/*.json",
+  "demo/*.db",
+  "demo/*.md",
+  "demo/all/*.jsonl",
+  "demo/media/**/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

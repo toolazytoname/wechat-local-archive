@@ -1,7 +1,7 @@
 {
   "source_kind": "live-db",
   "backup2_coverage": "unverified",
-  "record_count": 12,
+  "record_count": 14,
   "targets": {
     "Alice": {
       "match_count": 1
@@ -9,5 +9,6 @@
     "Studio": {
       "match_count": 1
     }
-  }
+  },
+  "dataset": "fictional synthetic Chinese demo for product walkthrough"
 }
