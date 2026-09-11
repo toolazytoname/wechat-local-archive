@@ -787,7 +787,7 @@ def add_correction(store: InsightStore, observation_id: str, action: str, user_t
 def list_runs(store: InsightStore, *, kind: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
     sql = (
         "SELECT run_id, kind, subject_person_id, engine_id, status, processed_count, created_at, "
-        "result_json, source_revision, identity_revision FROM profile_runs"
+        "result_json, scope_json, source_revision, identity_revision FROM profile_runs"
     )
     params: list[Any] = []
     if kind:
@@ -800,6 +800,7 @@ def list_runs(store: InsightStore, *, kind: str | None = None, limit: int = 20) 
         item = dict(row)
         try:
             item["result"] = json.loads(item.get("result_json") or "{}")
+            item["scope"] = json.loads(item.pop("scope_json", "{}") or "{}")
         except json.JSONDecodeError:
             item["result"] = {}
         out.append(_stale_fields(store, item))

@@ -144,6 +144,25 @@ def handle_get(handler, path: str, q: dict[str, list[str]]) -> bool:
 
 
 def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
+    if path == "/api/insights/engines/test":
+        handler._require_archive()
+        require_json_true(body.get("confirm_test"), "confirm_test")
+        # Fixed synthetic material only; never open a chat DB or consume an upload ticket.
+        provider = resolve_provider(handler.ctx.runtime.private_root, allow_synthetic=False,
+                                    consent={"approve_remote": True}, engine=str(body.get("engine") or ""))
+        if getattr(provider, "kind", "") not in {"remote", "grok_cli"}:
+            raise InsightsError("请选择一个 AI 服务。", "needs_engine")
+        try:
+            result = provider.analyze({"kind":"self", "self_ids":["synthetic_me"], "records":[{
+                "record_uid":"connection_test", "conversation_id":"synthetic", "sender_id":"synthetic_me",
+                "timestamp_utc":"2026-01-01T00:00:00Z", "text":"我计划每周整理一次读书笔记。"}]})
+            if not isinstance(result.get("observations"), list):
+                raise InsightsError("Invalid model response", "remote_invalid")
+            handler._send_json({"ok":True,"synthetic":True})
+        except InsightsError as exc:
+            from wechat_export.insights.tasks import task_error_message
+            handler._send_json({"ok":False,"code":exc.code,"message":task_error_message(exc.code),"synthetic":True})
+        return True
     if path == "/api/insights/recovery":
         require_json_true(body.get('confirm_recovery'))
         store,binding=_store(handler)

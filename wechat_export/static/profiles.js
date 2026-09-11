@@ -30,7 +30,7 @@ window.renderSettingsPanel = async function renderSettingsPanel() {
   panel.appendChild(el("h1", {}, ["档案与设置"]));
   panel.appendChild(el("p", { class: "muted" }, ["确认“我是谁”和会话用途。关系由你补充，不是系统推断。"]));
   const audit = data.audit || {};
-  panel.appendChild(el("p", {}, [`身份检查：${audit.verification_state || "unknown"}`]));
+  panel.appendChild(el("p", {}, [`身份检查：${({consistent:"已找到一致的本人标记",missing:"尚未找到本人标记",conflict:"本人标记需要核对"})[audit.verification_state] || "待确认"}`]));
   if (data.needs_identity_confirmation) {
     panel.appendChild(el("p", { class: "notice" }, ["记录里的本人标记不一致或缺失。请选择一个 sender，不要按发言数量猜测。"]));
     for (const id of audit.self_sender_ids || []) {
@@ -62,11 +62,13 @@ window.renderSettingsPanel = async function renderSettingsPanel() {
     panel.appendChild(el("p", { class: "notice" }, ["上次升级派生库没有完成，重新打开档案会再试一次，不会覆盖你后来写的笔记。"]));
   }
   renderRecovery(panel,data);
-  panel.appendChild(el("h2", {}, ["会话用途"]));
-  const convos = (window.state && window.state.convos) || [];
+  const roleDetails=el("details",{class:"ai-options"});
+  roleDetails.append(el("summary",{},["会话用途（可选）：收藏、工作或排除"]));
+  panel.append(roleDetails);
+  const convos = await conversationChoices();
   const roles = {};
   for (const role of data.conversation_roles || []) roles[role.conversation_id] = role.purpose;
-  for (const convo of convos.slice(0, 40)) {
+  for (const convo of convos) {
     const row = el("label", { class: "role-row" });
     row.appendChild(document.createTextNode((convo.display_name || convo.conversation_id) + " "));
     const select = el("select");
@@ -82,7 +84,7 @@ window.renderSettingsPanel = async function renderSettingsPanel() {
       });
     });
     row.appendChild(select);
-    panel.appendChild(row);
+    roleDetails.appendChild(row);
   }
   if (data.ambiguous_names && data.ambiguous_names.length) {
     panel.appendChild(el("p", { class: "notice" }, ["有重名会话，请按用途分别确认，不要按名字合并。"]));
@@ -95,8 +97,8 @@ window.renderSettingsPanel = async function renderSettingsPanel() {
     panel.appendChild(el("p", { class: "notice" }, [`引擎设置暂时读不到：${err.message || err}`]));
     return;
   }
-  panel.appendChild(el("h2", {}, ["AI 后端"]));
-  panel.appendChild(el("p", { class: "muted" }, ["本机原话始终可用，不必在这里选。AI 后端是 Grok CLI 或 BYOK 二选一；两个都可以配好，生成时用当前默认。密钥只写本机，不会回显。"]));
+  panel.appendChild(el("h2", {}, ["AI 服务"]));
+  panel.appendChild(el("p", { class: "muted" }, ["配置一个 AI 服务即可；两个都可以配好，生成时用当前默认。密钥只写本机，不会回显。"]));
   const byEng = {};
   for (const engine of engines.engines || []) byEng[engine.id] = engine;
   const grok = byEng.grok_cli || {};
@@ -123,14 +125,14 @@ window.renderSettingsPanel = async function renderSettingsPanel() {
     wrap.appendChild(input);
     return { wrap, input };
   }
-  const grokCmd = field("Grok 命令", { type: "text", value: grok.command || "", placeholder: "/Users/…/.grok/bin/grok" });
+  const grokCmd = field("Grok 程序位置", { type: "text", value: grok.command || "", placeholder: "/Users/…/.grok/bin/grok" });
   const grokModel = field("Grok 模型", { type: "text", value: grok.model || "grok-4.6" });
-  const byokUrl = field("BYOK Base URL", { type: "text", value: byok.base_url || "", placeholder: "https://token.weichao.site/v1" });
-  const byokModel = field("BYOK 模型", { type: "text", value: byok.model || "gpt-6-astra" });
-  const byokFile = field("BYOK 密钥文件（可选）", { type: "text", value: "", placeholder: "留空则使用已保存的密钥或下面粘贴的密钥" });
-  const byokKey = field("BYOK API Key（可选，不会回显）", { type: "password", value: "", placeholder: byok.has_api_key ? "已保存，留空不改" : "粘贴密钥，保存后不会再显示" });
+  const byokUrl = field("自定义 AI 服务地址", { type: "text", value: byok.base_url || "", placeholder: "https://token.weichao.site/v1" });
+  const byokModel = field("自定义 AI 模型名称", { type: "text", value: byok.model || "gpt-6-astra" });
+  const byokFile = field("API 密钥文件（高级，可留空）", { type: "text", value: "", placeholder: "留空则使用已保存的密钥或下面粘贴的密钥" });
+  const byokKey = field("API 密钥（已保存时可留空）", { type: "password", value: "", placeholder: byok.has_api_key ? "已保存，留空不改" : "粘贴密钥，保存后不会再显示" });
   panel.append(grokCmd.wrap, grokModel.wrap, byokUrl.wrap, byokModel.wrap, byokFile.wrap, byokKey.wrap);
-  const save = el("button", { type: "button", class: "primary" }, ["保存引擎设置"]);
+  const save = el("button", { type: "button", class: "primary" }, ["保存 AI 设置"]);
   const status = el("p", { class: "hint", role: "status" });
   save.addEventListener("click", async () => {
     try {
@@ -143,12 +145,14 @@ window.renderSettingsPanel = async function renderSettingsPanel() {
       if (byokKey.input.value.trim()) payload.byok.api_key = byokKey.input.value.trim();
       const saved = await api("/api/insights/engines", { method: "POST", body: JSON.stringify(payload) });
       byokKey.input.value = "";
-      status.textContent = `已保存。默认 ${saved.default}。密钥${(saved.engines || []).some((e) => e.id === "byok" && e.has_api_key) ? "已配置" : "未写入"}。`;
+      status.textContent = `已保存。默认使用 ${saved.default === "byok" ? "自定义 AI" : "Grok"}，可以测试连接了。`;
     } catch (err) {
       status.textContent = String(err.message || err);
     }
   });
-  panel.append(save, status);
+  const test=el("button",{type:"button"},["测试已保存的连接（仅发送虚构文字）"]);
+  test.onclick=()=>testAiConnection({id:defaultSelect.value},status,test);
+  panel.append(el("div",{class:"inline-actions"},[save,test]), status);
 };
 
 function consentLabel(engine, preview) {
@@ -177,8 +181,8 @@ const KIND_LABEL = {
 };
 
 function engineLabel(engine) {
-  if (engine.id === "grok_cli") return engine.available ? `Grok CLI（${engine.model || "grok-4.6"}）` : "Grok CLI（未找到）";
-  if (engine.id === "byok") return engine.available ? `BYOK（${engine.model || engine.host || "OpenAI 兼容"}）` : "BYOK（未配置）";
+  if (engine.id === "grok_cli") return engine.available ? `Grok（${engine.model || "默认模型"}）` : "Grok（未安装）";
+  if (engine.id === "byok") return engine.available ? `自定义 AI（${engine.model || engine.host || "已配置"}）` : "自定义 AI（未配置）";
   return engine.display_name || engine.id;
 }
 
@@ -196,7 +200,7 @@ function defaultAiEngine(preview) {
 
 function aiBackendPicker(preview, name, current, onChange) {
   const box = el("div", { class: "engine-pick" });
-  box.appendChild(el("span", { class: "tiny muted" }, ["AI 后端"]));
+  box.appendChild(el("span", { class: "tiny muted" }, ["AI 服务"]));
   for (const id of ["grok_cli", "byok"]) {
     const engine = findEngine(preview, id);
     const label = el("label");
@@ -274,13 +278,17 @@ function renderRunObservations(body, run, emptyNote) {
     if (obs.review_state === "excluded") continue;
     const entry = el("section", { class: "entry" });
     entry.appendChild(el("h3", {}, [obs.statement]));
-    entry.appendChild(el("p", { class: "tiny muted" }, [`${obs.basis} · ${(obs.caveats || []).join(" ")}`]));
+    entry.appendChild(el("p", { class: "tiny muted" }, [({stated_plans:"明确说过的计划",stated_priorities:"在意的事情",working_habits:"工作与习惯",communication_preferences:"交流偏好",recurring_topics:"常聊的话题",stated_by_friend:"对方的表达"})[obs.dimension] || "聊天中的观察"]));
+    const evidenceDetails=el("details",{class:"observation-evidence"});
+    evidenceDetails.append(el("summary",{},["查看原文与说明"]),el("p",{class:"tiny muted"},[(obs.caveats || []).join(" ")]));
+    for(const evidence of obs.evidence || [])evidenceDetails.append(el("blockquote",{},[evidence.quote || ""]));
+    entry.append(evidenceDetails);
     const ev = (obs.evidence || [])[0];
     if (ev && ev.record_uid) {
       const jump = el("button", { type: "button", class: "link" }, ["在聊天中查看"]);
       jump.addEventListener("click", () => {
         showProductPage("chat");
-        const convo = (window.state.convos || []).find((c) => c.conversation_id === ev.conversation_id);
+        const convo = {conversation_id:ev.conversation_id};
         if (convo && window.openConvo) window.openConvo(convo, true, ev.record_uid);
       });
       entry.appendChild(jump);
@@ -300,225 +308,168 @@ function renderRunObservations(body, run, emptyNote) {
   }
 }
 
-window.renderSelfPanel = async function renderSelfPanel() {
-  const panel = document.getElementById("panel-self");
-  panel.replaceChildren();
-  const heading = el("div", { class: "heading" }, [
-    el("div", {}, [el("h1", {}, ["我的画像"]), el("p", { class: "muted" }, ["从记录里看见自己，而不是被一个标签定义。"])]),
-  ]);
-  const actions = el("div", { class: "actions" });
-  const previewBtn = el("button", { type: "button" }, ["查看资料范围"]);
-  const localBtn = el("button", { type: "button" }, ["生成本机原话"]);
-  const aiBtn = el("button", { type: "button", class: "primary" }, ["用 AI 生成"]);
-  actions.append(previewBtn, localBtn, aiBtn);
-  heading.appendChild(actions);
-  panel.appendChild(heading);
-  const pickerHost = el("div");
-  const consentRow = el("label", { class: "readable" });
-  const check = el("input", { type: "checkbox" });
-  consentRow.append(check, document.createTextNode("批准本次云端分析"));
-  panel.append(pickerHost, consentRow);
-  const body = el("div");
-  panel.appendChild(body);
-  renderTaskHistory(panel);
-  let preview = { engines: [], default_engine: "grok_cli", consent: {} };
-  let current = defaultAiEngine(preview);
-
-  function syncConsent() {
-    consentRow.replaceChildren(check, document.createTextNode(consentLabel(current, preview)));
-  }
-
-  async function runProfile(useAi) {
-    if (useAi && !current.available) {
-      body.replaceChildren(renderEmpty("这个 AI 后端还不能用", "到档案与设置里检查 Grok CLI 或 BYOK。"));
-      return;
-    }
-    if (useAi && !check.checked) {
-      body.replaceChildren(renderEmpty("需要先批准这次上传", "勾选批准后才会把范围内的文字发给所选 AI 后端。"));
-      return;
-    }
-    try {
-      const payload = {
-        kind: "self",
-        scope: {},
-        engine: useAi ? current.id : "local_explicit",
-      };
-      if (useAi) {
-        const ticket = await api("/api/profiles/consent", {
-          method: "POST",
-          body: JSON.stringify({ kind: "self", scope: {}, engine: current.id, approve_remote: true }),
-        });
-        payload.approve_remote = true;
-        payload.consent_ticket = ticket.ticket_id;
-      }
-      payload.background=true;
-      const task = await api("/api/profiles/runs", {method:"POST",body:JSON.stringify(payload)});
-      check.checked=false;
-      const done=await waitForAnalysis(task,body);
-      const run=await api(`/api/profiles/runs/${done.run_id}`);
-      body.replaceChildren();
-      renderRunObservations(body, run, "没有提取到可核对的原话计划。这不是失败装点的假报告。");
-    } catch (err) {
-      body.replaceChildren(renderEmpty("还不能生成画像", String(err.message || err)));
-    }
-  }
-
-  previewBtn.addEventListener("click", () => paintCoverageStats(body, preview));
-  localBtn.addEventListener("click", () => runProfile(false));
-  aiBtn.addEventListener("click", () => runProfile(true));
+// Consumer flow: choose a person, review the actual outgoing sample, then approve once.
+function friendlyError(error) {
+  const messages = {
+    identity_unresolved: '请先确认档案里哪个人是你，再生成画像。',
+    needs_engine: '还没有可用的 AI 服务。请先到设置中配置并测试连接。',
+    needs_consent: '这次确认已失效。请重新点击生成，核对发送内容后再确认。',
+    scope_changed: '资料或人物选择已变化。请重新点击生成，确认新的范围。',
+    remote_http: 'AI 服务暂时没有返回结果。可以先测试连接，或切换服务后重试。',
+    remote_timeout: 'AI 响应超时，任务已停止。请稍后重试或切换服务。',
+    remote_auth: 'AI 登录或密钥已失效。请到设置更新后测试连接。',
+    remote_rate_limit: 'AI 服务额度不足或请求过于频繁。请检查额度或稍后重试。',
+    remote_invalid: 'AI 返回了无法读取的结果。没有保存为报告，请重试。',
+    collection_required: '请先选择一个存放收藏的群聊或会话。',
+    context_changed: '身份或排除设置已变化。请重新生成，不会沿用旧的批准。',
+    interrupted: '上次任务因服务重启而中断。请重新生成。',
+    task_timeout: '任务耗时过长，已停止。可以重新开始。',
+  };
+  return messages[error?.code] || error?.message || '操作未完成，请重试。';
+}
+function showActionError(host, error) {
+  host.replaceChildren(el('p', {class:'notice error-notice',role:'alert'}, [friendlyError(error)]));
+}
+function settingsButton(text='设置 AI 服务') {
+  return el('button', {type:'button',class:'link',onclick:()=>showProductPage('settings')}, [text]);
+}
+async function conversationChoices() {
+  // app.js's lexical `state` was never window.state. Fetch the authoritative list instead.
+  return api('/api/conversations');
+}
+async function testAiConnection(engine, host, button) {
+  button.disabled=true;host.replaceChildren(el('p',{role:'status'},['正在用一条虚构文字测试连接，不发送你的聊天…']));
   try {
-    preview = await api("/api/profiles/preview", { method: "POST", body: "{}" });
-    current = defaultAiEngine(preview);
-    pickerHost.replaceChildren(
-      aiBackendPicker(preview, "self-ai", current, (engine) => {
-        current = engine;
-        check.checked=false;
-        syncConsent();
-      })
-    );
-    syncConsent();
-    paintCoverageStats(body, preview);
-    try {
-      const listed = await api("/api/profiles/runs?kind=self");
-      if (listed.runs && listed.runs[0]) {
-        const latest = await api(`/api/profiles/runs/${listed.runs[0].run_id}`);
-        if (latest.observations && latest.observations.length) {
-          body.appendChild(el("h2", {}, ["最近一次报告"]));
-          renderRunObservations(body, latest, "没有提取到可核对的原话计划。这不是失败装点的假报告。");
-        }
-      }
-    } catch (_err) {
-      /* 没有历史报告时保持资料范围。 */
-    }
-  } catch (err) {
-    body.replaceChildren(renderEmpty("还不能读取资料范围", String(err.message || err)));
+    const result=await api('/api/insights/engines/test',{method:'POST',body:JSON.stringify({engine:engine.id,confirm_test:true})});
+    if(!result.ok) {const err=new Error(result.message);err.code=result.code;throw err;}
+    host.replaceChildren(el('p',{class:'success-note',role:'status'},['连接成功，可以生成。测试没有使用你的聊天。']));
+  } catch(error){showActionError(host,error);host.append(settingsButton());}
+  finally{button.disabled=false;}
+}
+function createApprovalDialog(engine, preview, title) {
+  const dialog=el('dialog',{class:'approval-dialog','aria-label':'确认本次 AI 分析'});
+  const close=el('button',{type:'button',class:'link'},['暂不发送']);
+  const approve=el('button',{type:'button',class:'primary'},['同意发送并开始生成']);
+  const c=preview.consent || {};
+  dialog.append(el('p',{class:'eyebrow'},['发送前确认']),el('h2',{},[title]),
+    el('p',{},[`本次发送 ${c.upload_count || 0} 条文字摘录，约 ${(c.estimated_chars || 0).toLocaleString()} 字。`]),
+    el('p',{class:'muted'},[`接收服务：${engine.host || '所选 AI 服务'} · ${engine.model || engineLabel(engine)}`]),
+    el('p',{class:'muted'},['不发送图片、文件或微信密钥。分析是有限抽样，不是全量聊天分析。已发送的内容无法撤回。']),
+    el('div',{class:'dialog-actions'},[close,approve]));
+  document.body.append(dialog);
+  return new Promise(resolve=>{
+    let finished=false;
+    const finish=value=>{if(finished)return;finished=true;dialog.close();dialog.remove();resolve(value);};
+    close.onclick=()=>finish(false);approve.onclick=()=>finish(true);
+    dialog.addEventListener('cancel',e=>{e.preventDefault();finish(false);});
+    dialog.showModal();close.focus();
+  });
+}
+
+async function mountProfileComposer(host, {kind,scope={},name='我'}) {
+  const marker=el('section',{class:'profile-composer'});host.replaceChildren(marker);
+  const intro=el('div',{class:'profile-start'});
+  const summary=el('p',{class:'scope-summary'},['正在读取可用资料…']);
+  const runButton=el('button',{type:'button',class:'primary'},[kind==='self'?'生成我的画像':`生成好友画像`]);
+  runButton.disabled=true;
+  const options=el('details',{class:'ai-options'}),optionsSummary=el('summary',{},['AI 服务']);options.append(optionsSummary);
+  const info=el('p',{class:'muted small-note'},['从聊天中整理有依据的观察，不是人格鉴定；收藏内容不会自动当作你的观点。']);
+  intro.append(summary,info,el('div',{class:'profile-start-actions'},[runButton]),options);
+  const feedback=el('div',{class:'action-feedback','aria-live':'polite'}),report=el('div',{class:'profile-report'});
+  marker.append(intro,feedback,report);
+  let preview,current,busy=false;
+  function isCurrent(){return marker.isConnected && host.contains(marker);}
+  function sync() {
+    current=current || defaultAiEngine(preview);
+    const c=preview.coverage || {},count=kind==='self'?c.self_count:c.other_count;
+    summary.textContent=kind==='self'?`资料范围：当前档案中的本人发言，排除收藏和手动排除的会话（${(count || 0).toLocaleString()} 条）`:`已选择 ${name} · 仅分析这段私聊中对方的发言`;
+    info.textContent=`AI 本次抽取 ${preview.consent?.upload_count || 0} 条文字，不是全量分析。结论须结合原文理解，不是人格鉴定。`;
+    optionsSummary.textContent=`AI 服务：${engineLabel(current)} · 更换或检查`;
+    runButton.disabled=busy || !current.available || !preview.consent?.upload_count;
   }
+  async function prepare() {
+    preview=await api('/api/profiles/preview',{method:'POST',body:JSON.stringify({kind,scope})});
+    if(!isCurrent())return false;
+    if(preview.needs_identity){
+      summary.textContent='第一次使用，请先确认哪些发言属于你。';
+      const context=await loadContext();
+      const identity=el('button',{type:'button',class:'primary'},['确认记录中的本人身份']);
+      identity.onclick=async()=>{identity.disabled=true;try{await api('/api/insights/context',{method:'POST',body:JSON.stringify({accept_consistent_self:true})});await mountProfileComposer(host,{kind,scope,name});}catch(e){showActionError(feedback,e);identity.disabled=false;}};
+      feedback.append(context.needs_identity_confirmation?settingsButton('去确认本人身份'):identity);
+      return false;
+    }
+    return true;
+  }
+  try {
+    if(!await prepare())return;
+    current=defaultAiEngine(preview);sync();
+    const picker=aiBackendPicker(preview,`profile-${kind}`,current,engine=>{current=engine;sync();feedback.replaceChildren();});
+    const test=el('button',{type:'button'},['测试连接（仅发送虚构文字）']);
+    test.onclick=()=>testAiConnection(current,feedback,test);
+    options.append(picker,el('div',{class:'inline-actions'},[test,settingsButton()]));
+    if(!current.available){feedback.append(el('p',{class:'notice'},['先连接 AI 服务，才能生成画像。']),settingsButton());options.open=true;}
+    else if(!preview.consent?.upload_count)feedback.append(el('p',{class:'notice'},['这份资料暂时没有可分析的文字。可以先在聊天页面检查记录。']));
+    const listed=await api(`/api/profiles/runs?kind=${kind}`);
+    if(!isCurrent())return;
+    const latest=(listed.runs || []).find(r=>r.engine_id!=='local_explicit' && (kind==='self' || (r.scope?.conversation_id===scope.conversation_id)));
+    if(latest){const run=await api(`/api/profiles/runs/${latest.run_id}`);if(isCurrent()){report.append(el('h2',{},['最近的画像']));renderRunObservations(report,run,'本次没有找到足够的原文依据。');}}
+    else report.append(el('div',{class:'getting-started'},[el('h2',{},[kind==='self'?'从你的聊天中，读懂自己':`为 ${name} 生成第一份画像`]),el('p',{class:'muted'},['生成后可查看观察、回到原聊天核对，也可以导出报告。不会自动发送任何记录。'])]));
+  } catch(error){if(isCurrent())showActionError(feedback,error);}
+  runButton.onclick=async()=>{
+    if(busy || !current?.available)return;
+    busy=true;sync();feedback.replaceChildren(el('p',{role:'status'},['正在确认本次发送范围…']));
+    try {
+      if(!await prepare())return;
+      if(!findEngine(preview,current.id).available)throw Object.assign(new Error(),{code:'needs_engine'});
+      current=findEngine(preview,current.id);sync();
+      feedback.replaceChildren();
+      if(!await createApprovalDialog(current,preview,kind==='self'?'生成我的画像':`生成 ${name} 的画像`))return;
+      if(!isCurrent())return;
+      const ticket=await api('/api/profiles/consent',{method:'POST',body:JSON.stringify({kind,scope,engine:current.id,approve_remote:true})});
+      const task=await api('/api/profiles/runs',{method:'POST',body:JSON.stringify({kind,scope,engine:current.id,approve_remote:true,consent_ticket:ticket.ticket_id,background:true})});
+      const done=await waitForAnalysis(task,feedback);
+      if(!isCurrent())return;
+      const run=await api(`/api/profiles/runs/${done.run_id}`);
+      if(!isCurrent())return;
+      feedback.replaceChildren(el('p',{class:'success-note',role:'status'},['画像已保存，可以查看下方报告。']));
+      report.replaceChildren(el('h2',{},['本次画像']));renderRunObservations(report,run,'本次没有找到足够的原文依据。');
+    } catch(error){if(isCurrent()){showActionError(feedback,error);feedback.append(settingsButton('检查 AI 设置'));}}
+    finally{busy=false;if(isCurrent())sync();}
+  };
+}
+window.renderSelfPanel=async function(){
+  const panel=document.getElementById('panel-self');
+  panel.replaceChildren(el('div',{class:'heading'},[el('div',{},[el('h1',{},['我的画像']),el('p',{class:'muted'},['从聊天中发现兴趣、习惯与反复在意的事情。'])])]));
+  const composer=el('div');panel.append(composer);
+  await mountProfileComposer(composer,{kind:'self'});
+  if(panel.contains(composer))renderTaskHistory(panel,'self');
+};
+window.renderFriendPanel=async function(){
+  const panel=document.getElementById('panel-friend');
+  panel.replaceChildren(el('div',{class:'heading'},[el('div',{},[el('h1',{},['好友画像']),el('p',{class:'muted'},['先选一位好友，只分析对方在私聊中的发言。'])])]));
+  const layout=el('div',{class:'friend-workspace'}),aside=el('section',{class:'friend-picker','aria-label':'选择好友'}),report=el('section',{class:'friend-detail'});
+  const search=el('input',{type:'search',placeholder:'搜索好友昵称或备注','aria-label':'搜索好友'}),list=el('div',{class:'friend-list'});
+  aside.append(el('h2',{},['选择好友']),search,list);layout.append(aside,report);panel.append(layout);
+  report.append(el('div',{class:'getting-started'},[el('h2',{},['你想了解谁？']),el('p',{class:'muted'},['在左侧搜索或选择好友，再生成画像。不会把群聊中的其他人混进来。'])]));
+  let selected=null;
+  try {
+    const convos=(await conversationChoices()).filter(c=>c.conversation_type==='private');
+    if(!panel.contains(layout))return;
+    const paint=()=>{
+      const q=search.value.trim().toLocaleLowerCase();
+      const matches=convos.filter(c=>`${c.display_name || ''} ${c.conversation_id}`.toLocaleLowerCase().includes(q));list.replaceChildren();
+      if(!matches.length){list.append(el('p',{class:'muted'},[convos.length?'没有找到这个好友，试试备注或昵称。':'这份档案没有一对一聊天记录。']));return;}
+      for(const c of matches){
+        const button=el('button',{type:'button',class:'person'+(selected===c.conversation_id?' selected':''),'aria-pressed':String(selected===c.conversation_id)},[
+          el('span',{class:'person-avatar','aria-hidden':'true'},[(c.display_name || '?').slice(0,1)]),
+          el('span',{class:'person-info'},[el('strong',{},[c.display_name || c.conversation_id]),el('small',{class:'muted'},[`${(c.message_count || 0).toLocaleString()} 条记录`])])]);
+        button.onclick=()=>{selected=c.conversation_id;paint();mountProfileComposer(report,{kind:'friend',name:c.display_name || '这位好友',scope:{friend_sender_ids:[c.conversation_id],conversation_id:c.conversation_id}});};list.append(button);
+      }
+    };
+    search.oninput=paint;paint();
+  } catch(error){showActionError(list,error);}
 };
 
-window.renderFriendPanel = async function renderFriendPanel() {
-  const panel = document.getElementById("panel-friend");
-  panel.replaceChildren();
-  panel.appendChild(el("h1", {}, ["好友画像"]));
-  panel.appendChild(el("p", { class: "muted" }, ["只用对方本人的发言。关系由你补充。"]));
-  const convos = ((window.state && window.state.convos) || []).filter((c) => c.conversation_type === "private");
-  if (!convos.length) {
-    panel.appendChild(renderEmpty("还没有可选好友", "打开档案后，这里列出一对一会话。"));
-    return;
-  }
-  let preview = { engines: [], default_engine: "grok_cli", consent: {} };
-  let current = defaultAiEngine(preview);
-  let useAi = false;
-  const modeRow = el("div", { class: "engine-pick" });
-  const localMode = el("button", { type: "button" }, ["本机原话"]);
-  const aiMode = el("button", { type: "button", class: "primary" }, ["用 AI"]);
-  modeRow.append(el("span", { class: "tiny muted" }, ["整理方式"]), localMode, aiMode);
-  const pickerHost = el("div");
-  const consentRow = el("label", { class: "readable hidden" });
-  const check = el("input", { type: "checkbox" });
-  consentRow.append(check, document.createTextNode("批准本次云端分析"));
-  panel.append(modeRow, pickerHost, consentRow);
-  function syncFriendMode() {
-    localMode.classList.toggle("primary", !useAi);
-    aiMode.classList.toggle("primary", useAi);
-    pickerHost.classList.toggle("hidden", !useAi);
-    consentRow.classList.toggle("hidden", !useAi);
-    if (useAi) consentRow.replaceChildren(check, document.createTextNode(consentLabel(current, preview)));
-  }
-  localMode.addEventListener("click", () => {
-    useAi = false;
-    syncFriendMode();
-  });
-  aiMode.addEventListener("click", () => {
-    useAi = true;
-    syncFriendMode();
-  });
-  try {
-    preview = await api("/api/profiles/preview", { method: "POST", body: JSON.stringify({ kind: "friend" }) });
-    current = defaultAiEngine(preview);
-    pickerHost.replaceChildren(
-      aiBackendPicker(preview, "friend-ai", current, (engine) => {
-        current = engine;
-        syncFriendMode();
-      })
-    );
-    syncFriendMode();
-  } catch (err) {
-    panel.appendChild(el("p", { class: "muted" }, [String(err.message || err)]));
-  }
-  const list = el("div", { class: "friend-list" });
-  const report = el("div");
-  const runBtn = el("button", { type: "button", class: "primary hidden" }, ["生成这份好友画像"]);
-  panel.append(list, runBtn, report);
-  let selected = null;
-  let gen = 0;
-  for (const convo of convos) {
-    const btn = el("button", { type: "button", class: "person" }, [convo.display_name || convo.conversation_id]);
-    btn.addEventListener("click", async () => {
-      selected = convo;
-      check.checked = false;
-      runBtn.classList.remove("hidden");
-      const my = ++gen;
-      const scope = { friend_sender_ids: [convo.conversation_id], conversation_id: convo.conversation_id };
-      report.replaceChildren(el("p", {}, [`已选择 ${convo.display_name || "TA"}，正在查看范围…`]));
-      try {
-        const next = await api("/api/profiles/preview", { method: "POST", body: JSON.stringify({ kind: "friend", scope }) });
-        if (my !== gen) return;
-        preview = next;
-        paintCoverageStats(report, preview);
-        report.insertBefore(el("h2", {}, [`关于 ${convo.display_name || "TA"}`]), report.firstChild);
-        syncFriendMode();
-      } catch (err) {
-        if (my !== gen) return;
-        report.replaceChildren(renderEmpty("无法预览", String(err.message || err)));
-      }
-    });
-    list.appendChild(btn);
-  }
-  runBtn.addEventListener("click", async () => {
-    if (!selected) return;
-    if (useAi && !current.available) {
-      report.replaceChildren(renderEmpty("这个 AI 后端还不能用", "到档案与设置里检查 Grok CLI 或 BYOK。"));
-      return;
-    }
-    if (useAi && !check.checked) {
-      report.replaceChildren(renderEmpty("需要先批准这次上传", "勾选批准后才会把对方发言发给所选 AI 后端。"));
-      return;
-    }
-    const my = ++gen;
-    const scope = { friend_sender_ids: [selected.conversation_id], conversation_id: selected.conversation_id };
-    report.replaceChildren(el("p", {}, ["正在根据对方发言整理…"]));
-    try {
-      const payload = {
-        kind: "friend",
-        subject_person_id: selected.conversation_id,
-        scope,
-        engine: useAi ? current.id : "local_explicit",
-      };
-      if (useAi) {
-        const ticket = await api("/api/profiles/consent", {
-          method: "POST",
-          body: JSON.stringify({ kind: "friend", scope, engine: current.id, approve_remote: true }),
-        });
-        payload.approve_remote = true;
-        payload.consent_ticket = ticket.ticket_id;
-      }
-      payload.background=true;
-      const task=await api("/api/profiles/runs", {method:"POST",body:JSON.stringify(payload)});
-      check.checked=false;
-      const done=await waitForAnalysis(task,report);
-      const run=await api(`/api/profiles/runs/${done.run_id}`);
-      if (my !== gen) return;
-      report.replaceChildren();
-      report.appendChild(el("h2", {}, [`关于 ${selected.display_name || "TA"}`]));
-      renderRunObservations(report, run, "当前文字太少，先不下结论。");
-    } catch (err) {
-      if (my !== gen) return;
-      report.replaceChildren(renderEmpty("无法生成", String(err.message || err)));
-    }
-  });
-};
-
-// Long-running work stays on the local server when the user changes pages.
 async function waitForAnalysis(task, host) {
   host.replaceChildren();
   const status = el('p', {class:'notice'}, ['任务已创建，正在处理…']);
@@ -532,30 +483,29 @@ async function waitForAnalysis(task, host) {
   });
   while (true) {
     task=await api(`/api/insights/tasks/${task.job_id}`);
-    status.textContent=(task.phase || task.state)+(task.remote?' · 已发出的模型请求不能撤回':'');
+    status.textContent=(task.phase || '正在准备')+(task.remote?' · 等待 AI 返回可能需要几分钟':'');
     progress.value=task.progress || 0;
     if(task.state==='ready')return task;
-    if(['failed','blocked','cancelled'].includes(task.state))throw new Error(task.state==='cancelled'?'任务已取消。':(task.error?.message || '任务中断，请重新开始。'));
+    if(['failed','blocked','cancelled'].includes(task.state))throw Object.assign(new Error(task.state==='cancelled'?'任务已取消。':(task.error?.message || '任务中断，请重新开始。')),{code:task.error?.code});
     await new Promise(resolve=>setTimeout(resolve,750));
   }
 }
 window.waitForAnalysis=waitForAnalysis;
 
-async function renderTaskHistory(host) {
-  const details=el('details',{class:'task-history'});details.append(el('summary',{},['最近任务与中断恢复']));host.append(details);
+async function renderTaskHistory(host, kind) {
+  const details=el('details',{class:'task-history'});details.append(el('summary',{},['生成记录']));host.append(details);
   try {
     const data=await api('/api/insights/tasks');
-    if(!data.tasks.length){details.append(el('p',{class:'muted'},['还没有任务。']));return;}
+    const tasks=data.tasks.filter(t=>t.remote && (!kind || t.kind===kind));
+    if(!tasks.length){details.append(el('p',{class:'muted'},['还没有 AI 生成记录。']));return;}
     const labels={queued:'等待开始',running:'正在处理',ready:'已完成',failed:'未完成',blocked:'已中断',cancelled:'已取消'};
-    for(const task of data.tasks){
-      const row=el('div',{class:'task-row'});row.append(el('span',{},[`${task.created_at} · ${labels[task.state] || task.state}`]));
+    for(const task of tasks){
+      const row=el('div',{class:'task-row'});row.append(el('span',{},[`${new Date(task.created_at).toLocaleString('zh-CN')} · ${labels[task.state] || task.state}`]));
       if(task.state==='ready' && task.run_id){
-        const view=el('button',{type:'button'},['查看报告']);view.onclick=async()=>{const run=await api(`/api/profiles/runs/${task.run_id}`);const report=el('div');row.append(report);renderRunObservations(report,run,'没有可展示原话。');view.disabled=true;};row.append(view);
+        const view=el('button',{type:'button'},['查看报告']);view.onclick=async()=>{view.disabled=true;try{const run=await api(`/api/profiles/runs/${task.run_id}`);const report=el('div');row.append(report);renderRunObservations(report,run,'没有可展示原话。');}catch(e){row.append(el('p',{role:'alert'},[friendlyError(e)]));view.disabled=false;}};row.append(view);
       } else if(['running','queued'].includes(task.state)){
-        const follow=el('button',{type:'button'},['查看进度']);follow.onclick=async()=>{const progress=el('div');row.append(progress);try{await waitForAnalysis(task,progress);progress.replaceChildren(el('p',{},['任务已完成，请刷新查看报告。']));}catch(e){progress.textContent=e.message;}};row.append(follow);
-      } else if(task.can_restart){
-        const restart=el('button',{type:'button'},['重新整理（本机）']);restart.onclick=async()=>{restart.disabled=true;const progress=el('div');row.append(progress);try{const next=await api(`/api/insights/tasks/${task.job_id}/restart`,{method:'POST',body:'{}'});const done=await waitForAnalysis(next,progress);const run=await api(`/api/profiles/runs/${done.run_id}`);progress.replaceChildren();renderRunObservations(progress,run,'没有可展示原话。');}catch(e){progress.textContent=e.message;}};row.append(restart);
-      } else if(task.remote && task.state!=='ready')row.append(el('p',{class:'muted'},['云端任务不会自动重发；请重新预览并批准。']));
+        const follow=el('button',{type:'button'},['查看进度']);follow.onclick=async()=>{follow.disabled=true;const progress=el('div');row.append(progress);try{await waitForAnalysis(task,progress);progress.replaceChildren(el('p',{},['任务已完成，请刷新查看报告。']));}catch(e){progress.textContent=friendlyError(e);}};row.append(follow);
+      } else if(task.remote && task.state!=='ready')row.append(el('p',{class:'muted'},[friendlyError(task.error)]));
       details.append(row);
     }
   }catch(e){details.append(el('p',{class:'muted'},[e.message]));}

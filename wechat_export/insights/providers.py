@@ -124,6 +124,8 @@ class MockProvider:
 REMOTE_SYSTEM_PROMPT = """你是本地微信档案的证据核对助手。只根据给定 records 产出 JSON。
 不要编造 record_uid。每条 observation 必须引用 records 里存在的 record_uid。
 quote 必须是对应记录 text 的原文片段，不能改写。
+statement 必须逐字引用对应记录中的一个完整句子，保留主语、否定、条件和时间，不添加“本人表示”等前缀。
+由 dimension 对原话分组，caveats 写证据限制；不要把猜测包装成已经核实的人格结论。
 禁止输出 MBTI、大五、精神病学诊断、出轨/忠诚分、爱意评分、性取向、宗教归属、资产总额。
 本人画像只能引用 sender_id 属于 self_ids 的记录。
 好友画像只能引用对方本人的 sender_id。
@@ -288,7 +290,9 @@ class RemoteOpenAIProvider:
                 retry = dict(body)
                 retry.pop("response_format", None)
                 return self._post_chat(retry, key, allow_json_mode=False)
-            raise InsightsError("remote engine request failed", "remote_http") from None
+            raise InsightsError("remote engine request failed", "remote_auth" if exc.code in {401,403} else "remote_rate_limit" if exc.code == 429 else "remote_http") from None
+        except TimeoutError:
+            raise InsightsError("remote engine timed out", "remote_timeout") from None
         except urllib.error.URLError:
             raise InsightsError("remote engine is unreachable", "remote_unreachable") from None
         if status >= 400:
@@ -457,10 +461,12 @@ class GrokCliProvider:
             try:
                 completed = self._invoke(argv, work)
             except subprocess.TimeoutExpired:
-                raise InsightsError("grok CLI timed out", "remote_http") from None
+                raise InsightsError("grok CLI timed out", "remote_timeout") from None
             except OSError:
                 raise InsightsError("local grok CLI is not available", "needs_engine") from None
-            if completed.returncode != 0 and "--json-schema" in argv and not learning:
+            if (completed.returncode != 0 and "--json-schema" in argv and not learning
+                    and "json-schema" in (completed.stderr or "").lower()
+                    and any(word in (completed.stderr or "").lower() for word in ("unknown", "unexpected", "unrecognized"))):
                 retry = []
                 skip_next = False
                 for item in argv:
@@ -477,15 +483,17 @@ class GrokCliProvider:
                     raise InsightsError("grok CLI request failed", "remote_http") from None
             stdout = completed.stdout or ""
             if completed.returncode != 0:
-                raise InsightsError("grok CLI request failed", "remote_http")
+                raise InsightsError("grok CLI request failed", grok_failure_code(completed.stdout, completed.stderr))
             try:
                 data = json.loads(stdout)
             except json.JSONDecodeError:
                 return _parse_model_json(stdout)
             if isinstance(data, dict) and data.get("type") == "error":
                 raise InsightsError("grok CLI request failed", "remote_http")
-            if isinstance(data, dict) and isinstance(data.get("structured_output"), dict):
-                return data["structured_output"]
+            if isinstance(data, dict):
+                for key in ("structured_output", "structuredOutput"):
+                    if isinstance(data.get(key), dict):
+                        return data[key]
             if isinstance(data, dict) and isinstance(data.get("text"), str):
                 return _parse_model_json(data["text"])
             if isinstance(data, dict) and ("observations" in data or (learning and "claims" in data)):
@@ -732,3 +740,15 @@ def cloud_consent_granted(config: dict[str, Any] | None, consent: dict[str, Any]
 
 def remote_allowed(config: dict[str, Any] | None, consent: dict[str, Any] | None) -> bool:
     return cloud_consent_granted(config, consent)
+
+
+def grok_failure_code(stdout, stderr):
+    """Allowlisted diagnosis; never return raw output that may contain private input."""
+    text = ((stdout or '') + (stderr or '')).lower()
+    if any(term in text for term in ('unauthorized', 'not authenticated', 'please log in', 'authentication failed', 'login required')):
+        return 'remote_auth'
+    if any(term in text for term in ('rate limit', 'quota', 'too many requests', 'insufficient credits')):
+        return 'remote_rate_limit'
+    if 'timed out' in text or 'timeout' in text:
+        return 'remote_timeout'
+    return 'remote_http'

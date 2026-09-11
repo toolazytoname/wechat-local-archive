@@ -1,52 +1,79 @@
 window.renderLearningPanel = async function renderLearningPanel() {
-  const panel = document.getElementById("panel-learning");
-  panel.replaceChildren();
-  const heading = el("div", { class: "heading" }, [
-    el("div", {}, [el("h1", {}, ["稍后读"]), el("p", { class: "muted" }, ["把存下来的东西，变成真正学到的东西。"])]),
-  ]);
-  const actions = el("div", { class: "actions" });
-  const importBtn = el("button", { type: "button", class: "primary" }, ["整理收藏群"]);
-  const exportBtn = el("button", { type: "button" }, ["导出学习资料"]);
-  actions.append(importBtn, exportBtn);
-  heading.appendChild(actions);
-  panel.appendChild(heading);
-  const status = el("p", { class: "muted", id: "learning-status" }, ["指定收藏学习用途的会话后，再整理条目。"]);
-  const list = el("div", { class: "library-list" });
-  panel.append(status, list);
-
+  const panel=document.getElementById('panel-learning');
+  panel.replaceChildren(el('div',{class:'heading'},[el('div',{},[el('h1',{},['稍后读']),el('p',{class:'muted'},['把发给自己的链接、图片和文件，整理成可以慢慢读的资料库。'])])]));
+  const source=el('section',{class:'collection-setup'});
+  const select=el('select',{'aria-label':'选择收藏会话'}),search=el('input',{type:'search',placeholder:'搜索收藏群或会话','aria-label':'搜索收藏会话'});
+  const importBtn=el('button',{type:'button',class:'primary'},['整理这个会话']);importBtn.disabled=true;
+  const sourceHint=el('p',{class:'muted small-note'},['选择你用来存放资料的会话。整理会保留已有笔记，不会自动访问网页。']);
+  source.append(el('h2',{},['资料从哪里来？']),sourceHint,el('div',{class:'collection-controls'},[search,select,importBtn]));
+  const status=el('div',{id:'learning-status',class:'action-feedback','aria-live':'polite'});
+  const tools=el('div',{class:'library-toolbar'}),count=el('span',{class:'muted'}),query=el('input',{type:'search','aria-label':'搜索学习资料',placeholder:'搜索标题、备注或笔记'}),filter=el('select',{'aria-label':'阅读状态'});
+  for(const [value,label] of [['','全部资料'],['unread','未读'],['read','已读']])filter.append(el('option',{value},[label]));
+  const exportBtn=el('button',{type:'button'},['导出学习资料']);exportBtn.disabled=true;
+  tools.append(count,query,filter,exportBtn);
+  const list=el('div',{class:'library-list'});panel.append(source,status,tools,list);
+  let sequence=0,allCount=0,busy=false;
   async function refresh() {
-    const data = await api("/api/learning/items");
-    list.replaceChildren();
-    if (!data.items.length) {
-      list.appendChild(renderEmpty("还没有学习条目", "把一个群标成收藏学习，再点整理。不会自动访问网页。"));
-      return;
-    }
-    status.textContent = `${data.count} 个条目 · 收藏不等于认同作者`;
-    for (const item of data.items) {
-      const btn = el("button", { type: "button", class: "article" });
-      btn.appendChild(el("h3", {}, [item.display_title]));
-      btn.appendChild(el("p", { class: "meta" }, [`${contentStateLabel(item.content_state)} · ${readingStateLabel(item.reading_state)} · 来源 ${item.sources.length}`]));
-      btn.addEventListener("click", () => openLearningItem(item.item_id));
-      list.appendChild(btn);
+    const seq=++sequence;
+    const params=new URLSearchParams({q:query.value,reading:filter.value});
+    const data=await api('/api/learning/items?'+params);
+    if(seq!==sequence || !panel.contains(list))return;
+    list.replaceChildren();count.textContent=`${data.count} 项资料`;
+    if(!query.value && !filter.value)allCount=data.count;
+    exportBtn.disabled=busy || !allCount;
+    if(!data.items.length){list.append(el('div',{class:'getting-started'},[el('h2',{},[query.value || filter.value?'没有匹配的资料':'先把收藏整理进来']),el('p',{class:'muted'},[query.value || filter.value?'换个关键词或阅读状态试试。':'在上方选择会话，点击「整理这个会话」。链接、图片和文件会出现在这里。'])]));return;}
+    for(const item of data.items){
+      const button=el('button',{type:'button',class:'article'}),badge=el('span',{class:'article-kind'},[({link:'链接',image:'图片',file:'文件',video:'视频',voice:'语音'})[item.kind] || '笔记']);
+      button.append(badge,el('div',{class:'article-copy'},[el('h3',{},[item.display_title]),el('p',{class:'meta'},[`${contentStateLabel(item.content_state)} · ${readingStateLabel(item.reading_state)}`])]),el('span',{'aria-hidden':'true',class:'article-arrow'},['→']));
+      button.onclick=()=>openLearningItem(item.item_id).catch(e=>showActionError(status,e));list.append(button);
     }
   }
-
-  importBtn.addEventListener("click", async () => {
-    status.textContent = "正在离线整理…";
-    try {
-      const result = await api("/api/learning/imports", { method: "POST", body: "{}" });
-      status.textContent = `扫描 ${result.scanned} 条，新增 ${result.items_created}，沿用 ${result.items_reused}`;
-      await refresh();
-    } catch (err) {
-      status.textContent = String(err.message || err);
+  let timer;
+  query.oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>refresh().catch(e=>showActionError(status,e)),200);};
+  filter.onchange=()=>refresh().catch(e=>showActionError(status,e));
+  try {
+    const [context,convos]=await Promise.all([loadContext(),conversationChoices()]);
+    if(!panel.contains(list))return;
+    const roles=new Set((context.conversation_roles || []).filter(r=>r.purpose==='read_later').map(r=>r.conversation_id));
+    let chosen=roles.size===1?[...roles][0]:'';
+    function populate(){
+      const q=search.value.trim().toLocaleLowerCase();select.replaceChildren(el('option',{value:''},['请选择收藏会话…']));
+      for(const c of convos.filter(c=>`${c.display_name || ''} ${c.conversation_id}`.toLocaleLowerCase().includes(q))){
+        const option=el('option',{value:c.conversation_id},[`${c.display_name || c.conversation_id}${roles.has(c.conversation_id)?' · 已设为收藏':''}`]);select.append(option);
+      }
+      select.value=chosen;
+      if(!select.value){chosen='';select.value='';}
+      importBtn.disabled=busy || !chosen;
     }
-  });
-  exportBtn.addEventListener("click", async () => {
-    const result = await api("/api/insights/exports", { method: "POST", body: JSON.stringify({ kind: "learning" }) });
-    status.textContent = `已写出 ${result.item_count} 个条目的学习包。`;
-    const reveal=el('button',{type:'button'},['在访达中显示']);reveal.onclick=()=>api('/api/insights/reveal',{method:'POST',body:JSON.stringify({delivery_id:result.delivery_id})});status.append(reveal);
-  });
-  await refresh();
+    search.oninput=populate;select.onchange=()=>{chosen=select.value;importBtn.disabled=busy || !chosen;};populate();
+    importBtn.onclick=async()=>{
+      if(busy || !chosen)return;
+      const id=chosen;busy=true;importBtn.disabled=true;exportBtn.disabled=true;select.disabled=true;search.disabled=true;importBtn.textContent='正在整理…';
+      status.replaceChildren(el('p',{role:'status'},['正在整理链接、图片和文件。记录较多时请稍等，不需要重复点击。']));
+      try {
+        await api('/api/insights/context',{method:'POST',body:JSON.stringify({conversation_id:id,purpose:'read_later'})});
+        const result=await api('/api/learning/imports',{method:'POST',body:JSON.stringify({conversation_id:id})});
+        roles.add(id);query.value='';filter.value='';await refresh();
+        status.replaceChildren(el('p',{class:'success-note',role:'status'},[`整理完成：扫描 ${result.scanned} 条，新增 ${result.items_created} 项，保留 ${result.items_reused} 项已有资料和笔记。`]));
+        if(!allCount)status.append(el('p',{class:'muted'},['这个会话暂时没有可整理的链接、图片或文件，可以换一个会话。']));
+      } catch(e){showActionError(status,e);}
+      finally{busy=false;select.disabled=false;search.disabled=false;importBtn.textContent='整理这个会话';populate();exportBtn.disabled=!allCount;}
+    };
+    await refresh();
+  } catch(error){showActionError(status,error);}
+  exportBtn.onclick=async()=>{
+    if(busy)return;
+    busy=true;exportBtn.disabled=true;importBtn.disabled=true;exportBtn.textContent='正在导出…';
+    status.replaceChildren(el('p',{role:'status'},['正在打包正文、笔记和已找到的附件，请稍等…']));
+    try {
+      const result=await api('/api/insights/exports',{method:'POST',body:JSON.stringify({kind:'learning'})});
+      status.replaceChildren(el('p',{class:'success-note',role:'status'},[`已导出 ${result.item_count} 项资料。打开文件夹里的「开始阅读.html」即可离线阅读。`]));
+      const reveal=el('button',{type:'button'},['打开导出文件夹']);
+      reveal.onclick=async()=>{try{await api('/api/insights/reveal',{method:'POST',body:JSON.stringify({delivery_id:result.delivery_id})});}catch(e){status.append(el('p',{role:'alert'},[friendlyError(e)]));}};
+      status.append(reveal);
+    } catch(error){showActionError(status,error);}
+    finally{busy=false;exportBtn.disabled=!allCount;exportBtn.textContent='导出学习资料';importBtn.disabled=!select.value;}
+  };
 };
 
 function contentStateLabel(state) {
@@ -165,15 +192,16 @@ async function openLearningItem(itemId) {
         sumBox.textContent = String(err.message || err);
       }
     });
-    panel.append(sumBtn, sumBox);
+    const excerpt=el("details",{class:"ai-options"});excerpt.append(el("summary",{},["仅摘录正文（不使用 AI）"]),sumBtn,sumBox);panel.append(excerpt);
     renderLearningAnalysis(panel,item);
   } else if (!mediaState.hasAvailableAttachment) {
     panel.appendChild(el("div", { class: "notice" }, ["当前没有正文，也不能根据标题编摘要。可以粘贴已取得的正文。"]));
     const area = el("textarea", { rows: "8", placeholder: "粘贴已取得的正文" });
     const save = el("button", { type: "button", class: "primary" }, ["保存正文"]);
     save.addEventListener("click", async () => {
-      await api(`/api/learning/items/${itemId}/content`, { method: "POST", body: JSON.stringify({ text: area.value }) });
-      openLearningItem(itemId);
+      save.disabled=true;
+      try {await api(`/api/learning/items/${itemId}/content`, { method: "POST", body: JSON.stringify({ text: area.value }) });
+      await openLearningItem(itemId);}catch(e){panel.append(el("p",{role:"alert",class:"notice"},[friendlyError(e)]));save.disabled=false;}
     });
     panel.append(area, save);
   }
@@ -187,18 +215,22 @@ async function openLearningItem(itemId) {
       payload.note_id = item.notes[0].note_id;
       payload.revision = item.notes[0].revision;
     }
-    const saved = await api(`/api/learning/items/${itemId}/notes`, { method: "POST", body: JSON.stringify(payload) });
+    noteBtn.disabled=true;
+    try {const saved = await api(`/api/learning/items/${itemId}/notes`, { method: "POST", body: JSON.stringify(payload) });
     item.notes = [saved, ...(item.notes || []).filter((row) => row.note_id !== saved.note_id)];
     note.value = saved.user_text;
     noteStatus.textContent = "已保存到本机";
+    }catch(e){noteStatus.textContent=friendlyError(e);}finally{noteBtn.disabled=false;}
   });
   const readBtn = el("button", { type: "button", class: "primary" }, [item.reading_state === "read" ? "已读" : "标记已读"]);
   readBtn.addEventListener("click", async () => {
-    await api(`/api/learning/items/${itemId}`, { method: "PATCH", body: JSON.stringify({ reading_state: "read", revision: item.revision }) });
+    readBtn.disabled=true;
+    try{await api(`/api/learning/items/${itemId}`, { method: "PATCH", body: JSON.stringify({ reading_state: "read", revision: item.revision }) });
     item.revision += 1;
     item.reading_state = "read";
     readBtn.textContent = "已读";
     readBtn.disabled=true;
+    }catch(e){noteStatus.textContent=friendlyError(e);readBtn.disabled=false;}
   });
   panel.append(el("h3", {}, ["我的笔记"]), note, noteBtn, noteStatus, readBtn);
 }

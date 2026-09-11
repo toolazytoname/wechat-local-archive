@@ -32,7 +32,10 @@ async function api(path, opts = {}) {
       showSetup();
       $("setup-status").textContent = "档案已切换或被修改。请重新选择档案并预览，旧标签页不会导出其他账号。";
     }
-    throw new Error(data.error || "request failed");
+    const error = new Error(data.error || "请求未完成，请重试。");
+    error.code = data.code;
+    error.status = res.status;
+    throw error;
   }
   if (archiveScoped && requestArchive !== window.ARCHIVE_ID) throw new Error("档案已切换，忽略旧请求结果。");
   return data;

@@ -77,7 +77,8 @@ def start_profile_task(jobs: JobStore, data_root: Path, binding, *, request: dic
         except Exception as exc:
             job.state='cancelled' if jobs.cancelled(job.job_id) else 'failed'
             code=getattr(exc,'code','analysis_failed')
-            job.error={'code':code,'message':'任务未完成。资料未改动；请检查范围、身份或引擎后重新开始。'}
+            job.payload['phase']='已取消' if job.state=='cancelled' else '生成未完成'
+            job.error={'code':code,'message':task_error_message(code)}
             jobs.save(job)
         finally:
             if conn is not None:conn.close()
@@ -105,8 +106,26 @@ def start_learning_task(jobs,data_root,binding,*,item_id,provider,prepared):
             job.state='ready';job.payload.update(summary_id=result['summary_id'],progress=100,phase='学习草稿已保存');jobs.save(job)
         except Exception as exc:
             job.state='cancelled' if jobs.cancelled(job.job_id) else 'failed'
-            job.error={'code':getattr(exc,'code','summary_failed'),'message':'整理未完成。正文未改动，请检查引擎或重新预览。'};jobs.save(job)
+            code=getattr(exc,'code','summary_failed')
+            job.payload['phase']='已取消' if job.state=='cancelled' else '整理未完成'
+            job.error={'code':code,'message':task_error_message(code)};jobs.save(job)
         finally:
             if s is not None:s.close()
     jobs.run_in_thread(job.job_id,worker)
     return public_task(job)
+
+
+def task_error_message(code):
+    # Never expose provider stderr, prompts or keys through job errors.
+    return {
+        'remote_http':'AI 服务暂时没有返回结果，请测试连接或切换服务后重试。',
+        'remote_timeout':'AI 响应超时，请稍后重试或切换服务。',
+        'remote_auth':'AI 登录或密钥失效，请在设置中更新。',
+        'remote_rate_limit':'AI 请求过于频繁或额度不足，请检查额度或稍后重试。',
+        'remote_invalid':'AI 返回的格式无法读取，未保存为报告。',
+        'needs_engine':'AI 服务未配置，请先完成设置。',
+        'context_changed':'身份或排除设置已变化，请重新生成。',
+        'scope_changed':'资料范围已变化，请重新预览并批准。',
+        'task_timeout':'任务耗时过长，已停止。可以重新开始。',
+        'cancelled':'任务已取消。',
+    }.get(code,'操作未完成，原始资料没有改动。请重试；如仍失败可提供错误代码：'+str(code))

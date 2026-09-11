@@ -279,10 +279,10 @@ class RemoteProviderTests(unittest.TestCase):
         self.assertIn("不发送附件和密钥", text)
         self.assertIn("Grok CLI", text)
         self.assertIn("BYOK", text)
-        self.assertIn("生成本机原话", text)
-        self.assertIn("用 AI 生成", text)
+        self.assertNotIn("生成本机原话", text)
+        self.assertIn("同意发送并开始生成", text)
         self.assertIn("approve_remote", text)
-        self.assertIn("AI 后端", text)
+        self.assertIn("AI 服务", text)
         self.assertNotRegex(text, r"sk-[A-Za-z0-9_-]{8,}")
 
 
@@ -430,7 +430,7 @@ class GrokCliProviderTests(unittest.TestCase):
             def fake_run(argv, cwd=None, timeout=None, capture_output=None, text=None, env=None):
                 calls.append(list(argv))
                 if "--json-schema" in argv:
-                    return type("Proc", (), {"returncode": 1, "stdout": "", "stderr": "bad schema"})()
+                    return type("Proc", (), {"returncode": 1, "stdout": "", "stderr": "unexpected argument --json-schema"})()
                 content = {"observations": []}
                 return type("Proc", (), {"returncode": 0, "stdout": json.dumps({"structured_output": content}), "stderr": ""})()
 
