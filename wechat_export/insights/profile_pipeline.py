@@ -15,8 +15,13 @@ from wechat_export.export_service import QueryError, parse_time_to_ms
 from wechat_export.insights.identity import excluded_conversation_ids, load_identity
 from wechat_export.insights.profile_validate import (
     SENSITIVE,
-    classify_statement_support,
+    SUPPORT_CONTRADICTED,
+    SUPPORT_EXCERPT,
+    SUPPORT_GROUNDED,
+    SUPPORT_UNSUPPORTED,
+    classify_observation_support,
     filter_valid,
+    is_thin_text,
     validate_observation,
 )
 from wechat_export.insights.store import InsightStore, InsightsError, utc_now
@@ -297,7 +302,7 @@ def extract_self_observations(
             obs = {
                 "dimension": "scoped_observation",
                 "statement": statement,
-                "basis": "scoped_observation",
+                "basis": "explicit_excerpt",
                 "quote": statement,
                 "source_text": text,
                 "evidence": [
@@ -310,7 +315,9 @@ def extract_self_observations(
                 ],
                 "evidence_ids": [row["record_uid"]],
                 "context_scope": row["conversation_id"],
-                "caveats": ["这是记录中的完整句段摘录，保留条件和主语；不等于本人意图或已核实事实。"],
+                "caveats": ["可核对原话：这是记录中的完整句段摘录，保留条件和主语；不等于本人意图或已核实事实。"],
+                "support": SUPPORT_EXCERPT,
+                "verification": "excerpt",
             }
             try:
                 validate_observation(obs, allowed_uids=allowed, self_ids=set(self_ids), subject="self")
@@ -347,10 +354,12 @@ def extract_friend_observations(
         snippet = text
         if skip_statements and snippet in skip_statements:
             continue
+        if is_thin_text(snippet):
+            continue
         obs = {
             "dimension": "stated_by_friend",
             "statement": snippet,
-            "basis": "scoped_observation",
+            "basis": "explicit_excerpt",
             "quote": snippet,
             "source_text": text,
             "evidence": [
@@ -362,7 +371,9 @@ def extract_friend_observations(
                 }
             ],
             "evidence_ids": [row["record_uid"]],
-            "caveats": ["这是该发送者发出的完整文本，可能包含引用、转述或假设；不等于其本人观点或已核实事实。"],
+            "caveats": ["可核对原话：这是该发送者发出的完整文本，可能包含引用、转述或假设；不等于其本人观点或已核实事实。"],
+            "support": SUPPORT_EXCERPT,
+            "verification": "excerpt",
         }
         try:
             validate_observation(obs, allowed_uids=allowed, self_ids=set(), subject="friend")
@@ -458,9 +469,25 @@ def _rebuild_observation(obs: dict[str, Any], records: dict[str, dict[str, Any]]
     if missing:
         return None, "unknown_evidence"
     evidence = []
+    source_texts: list[str] = []
     for uid in ids:
         rec = records[uid]
-        quote = rec["text"]
+        raw_quote = ""
+        for item in obs.get("evidence") or []:
+            if isinstance(item, dict) and str(item.get("record_uid")) == uid:
+                raw_quote = str(item.get("quote") or "")
+                break
+        if not raw_quote:
+            raw_quote = str(obs.get("quote") or "")
+        source = rec["text"]
+        if raw_quote:
+            if raw_quote not in source:
+                return None, "quote_mismatch"
+            quote = raw_quote
+        else:
+            quote = source
+        if is_thin_text(quote):
+            continue
         evidence.append(
             {
                 "record_uid": rec["record_uid"],
@@ -469,27 +496,40 @@ def _rebuild_observation(obs: dict[str, Any], records: dict[str, dict[str, Any]]
                 "quote": quote,
             }
         )
-    source_text = records[evidence[0]["record_uid"]]["text"]
-    statement = str(obs.get("statement") or evidence[0]["quote"])
-    support = classify_statement_support(statement, source_text)
-    if support in {"unsupported", "contradicted"}:
+        source_texts.append(source)
+    if not evidence:
+        return None, "thin_evidence"
+    statement = str(obs.get("statement") or evidence[0]["quote"]).strip()
+    if is_thin_text(statement):
+        return None, "thin_statement"
+    support = classify_observation_support(
+        statement,
+        source_texts,
+        quotes=[item["quote"] for item in evidence],
+    )
+    if support in {SUPPORT_UNSUPPORTED, SUPPORT_CONTRADICTED}:
         return None, support
-    caveats = list(obs.get("caveats") or ["观察必须能在原文中核对。"])
-    if support == "restatement":
-        caveats.append("这是对原话的归纳复述，须对照原文；不是已核实事实，也不是画像归纳完成。")
-    elif support == "excerpt":
-        caveats.append("这是记录中的原话摘录，不是已核实的事实。")
+    caveats = list(obs.get("caveats") or [])
+    if support == SUPPORT_GROUNDED:
+        caveats.append("范围内观察（待核对）：引文已核对，归纳含义仍需你确认；不是已核实事实或人格鉴定。")
+        basis = "citation_checked_meaning_unverified"
+    else:
+        caveats.append("可核对原话：这是记录中的完整句段摘录，不是已核实事实。")
+        basis = "explicit_excerpt"
+    if not any("观察必须能在原文中核对" in item for item in caveats):
+        caveats.insert(0, "观察必须能在原文中核对。")
     rebuilt = {
         "dimension": obs.get("dimension") or "scoped_observation",
         "statement": statement,
-        "basis": "scoped_observation",
+        "basis": basis,
         "quote": evidence[0]["quote"],
-        "source_text": source_text,
+        "source_text": source_texts[0],
         "evidence": evidence,
         "evidence_ids": [item["record_uid"] for item in evidence],
         "context_scope": evidence[0]["conversation_id"],
         "caveats": caveats,
         "support": support,
+        "verification": "excerpt" if support == SUPPORT_EXCERPT else "citation_checked_meaning_unverified",
     }
     return rebuilt, None
 
@@ -546,6 +586,8 @@ def _observations_from_provider(
             skip_statements=skip_statements,
         )
         observations = _merge_observations(observations)
+        if not observations or all(is_thin_text(o.get("statement") or "") for o in observations):
+            return "insufficient", [], {"upload_count": 0, "estimated_chars": 0, "candidate_count": len(observations), "insufficient_reason": "thin_or_greeting_only"}
         status = "insufficient" if len(observations) < 2 else "completed"
         return status, observations, {"upload_count": 0, "estimated_chars": 0, "candidate_count": len(observations)}
 
@@ -558,16 +600,20 @@ def _observations_from_provider(
         skip_uids=skip_uids,
     )
     records = packed["records"]
-    if not records:
+    substantive = [item for item in records if not is_thin_text(item.get("text") or "")]
+    packed["substantive_count"] = len(substantive)
+    packed["thin_count"] = max(0, len(records) - len(substantive))
+    if not substantive:
+        packed["insufficient_reason"] = "thin_or_greeting_only"
         return "insufficient", [], packed
     raw = provider.analyze(
         {
             "kind": kind,
             "self_ids": self_ids,
-            "records": records,
+            "records": substantive,
         }
     )
-    by_uid = {item["record_uid"]: item for item in records}
+    by_uid = {item["record_uid"]: item for item in substantive}
     prepared: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for obs in raw.get("observations") or []:
@@ -593,7 +639,15 @@ def _observations_from_provider(
     packed["processed_count"] = len(kept)
     packed["rejected"] = rejected
     packed["rejected_count"] = len(rejected)
+    packed["excerpt_count"] = sum(1 for item in kept if item.get("support") == SUPPORT_EXCERPT)
+    packed["grounded_count"] = sum(1 for item in kept if item.get("support") == SUPPORT_GROUNDED)
     if not kept:
+        if packed["rejected_count"] and all(
+            row.get("reason") in {"thin_statement", "thin_evidence"} for row in rejected
+        ):
+            packed["insufficient_reason"] = "thin_or_greeting_only"
+            return "insufficient", [], packed
+        packed["insufficient_reason"] = "no_verifiable_observation"
         return "partial", [], packed
     return "completed", kept, packed
 
@@ -670,6 +724,11 @@ def run_profile(
                     "rejected_count": extra.get("rejected_count", 0),
                     "record_limit": DEFAULT_REMOTE_RECORD_LIMIT,
                     "text_char_limit": DEFAULT_REMOTE_TEXT_CHARS,
+                    "excerpt_count": extra.get("excerpt_count", sum(1 for o in observations if o.get("support") == SUPPORT_EXCERPT)),
+                    "grounded_count": extra.get("grounded_count", sum(1 for o in observations if o.get("support") == SUPPORT_GROUNDED)),
+                    "substantive_count": extra.get("substantive_count"),
+                    "thin_count": extra.get("thin_count"),
+                    "insufficient_reason": extra.get("insufficient_reason"),
                 },
                 ensure_ascii=False,
             ),
@@ -760,6 +819,16 @@ def get_run(store: InsightStore, run_id: str) -> dict[str, Any]:
         item["evidence"] = json.loads(item["evidence_json"])
         item["caveats"] = json.loads(item["caveats_json"])
         item["synthetic"] = bool(item["synthetic"])
+        basis = item.get("basis") or ""
+        if basis == "explicit_excerpt":
+            item["support"] = SUPPORT_EXCERPT
+            item["verification"] = "excerpt"
+        elif basis == "citation_checked_meaning_unverified":
+            item["support"] = SUPPORT_GROUNDED
+            item["verification"] = "citation_checked_meaning_unverified"
+        else:
+            item["support"] = item.get("support") or SUPPORT_GROUNDED
+            item["verification"] = item.get("verification") or "citation_checked_meaning_unverified"
         observations.append(item)
     run["observations"] = observations
     return _stale_fields(store, run)

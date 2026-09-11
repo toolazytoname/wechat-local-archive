@@ -31,16 +31,17 @@ def export_profile(store: InsightStore, run_id: str, dest: Path) -> dict:
               '```json', json.dumps(run['coverage'], ensure_ascii=False, indent=2), '```', '']
         blocks = []
         for obs in observations:
-            md.extend(['## ' + obs['statement'], '', *obs['caveats'], ''])
+            layer = '可核对原话' if obs.get('support') == 'excerpt' or obs.get('basis') == 'explicit_excerpt' else '待核对归纳'
+            md.extend(['## ' + obs['statement'], '', f'*{layer}*', '', *obs['caveats'], ''])
             quotes = []
             for ev in obs['evidence']:
                 quote = str(ev.get('quote') or '')
                 md.extend(['> ' + quote.replace('\n','\n> '), '', f"来源记录：`{ev['record_uid']}`", ''])
                 quotes.append('<blockquote>' + html.escape(quote) + '</blockquote><small>记录：' + html.escape(ev['record_uid']) + '</small>')
-            blocks.append('<section><h2>' + html.escape(obs['statement']) + '</h2>' + ''.join(quotes) +
+            blocks.append('<section><p class="layer">'+html.escape(layer)+'</p><h2>' + html.escape(obs['statement']) + '</h2>' + ''.join(quotes) +
                           '<p>' + html.escape(' '.join(obs['caveats'])) + '</p></section>')
         (staging/'报告.md').write_text('\n'.join(md), encoding='utf-8')
-        (staging/'开始阅读.html').write_text('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'"><title>'+html.escape(title)+'</title><style>body{max-width:780px;margin:40px auto;padding:0 24px;font:16px/1.8 system-ui;color:#243a30;background:#f5f7f3}section{background:white;padding:24px;margin:20px 0;border-radius:14px}blockquote{white-space:pre-wrap;border-left:3px solid #759986;padding-left:18px}h2{font-size:20px}small{overflow-wrap:anywhere}</style><h1>'+html.escape(title)+'</h1><p>'+html.escape(notice)+'</p><p>观察 '+str(len(observations))+' 条</p>'+''.join(blocks)+'</html>', encoding='utf-8')
+        (staging/'开始阅读.html').write_text('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'"><title>'+html.escape(title)+'</title><style>body{max-width:780px;margin:40px auto;padding:0 24px;font:16px/1.8 system-ui;color:#243a30;background:#f5f7f3}section{background:white;padding:24px;margin:20px 0;border-radius:14px}blockquote{white-space:pre-wrap;border-left:3px solid #759986;padding-left:18px}h2{font-size:20px}.layer{color:#5b7266;font-size:13px}small{overflow-wrap:anywhere}</style><h1>'+html.escape(title)+'</h1><p>'+html.escape(notice)+'</p><p>观察 '+str(len(observations))+' 条。标题是观察，引文是可核对原话；归纳含义仍需你确认。</p>'+''.join(blocks)+'</html>', encoding='utf-8')
         manifest = {'kind':'profile_report','run_id':run_id,'observation_count':len(observations),
                     'source_kind':'live-db','backup2_coverage':'unverified','source_revision':run['source_revision'],
                     'is_stale':run.get('is_stale',False)}

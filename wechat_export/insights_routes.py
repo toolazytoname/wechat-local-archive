@@ -200,8 +200,15 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
         dest=root/name
         if dest.is_symlink() or not dest.is_dir() or dest.resolve().parent!=root:
             raise InsightsError('Unknown delivery','not_found')
-        subprocess.run(['open','-R',str(dest)],check=False)
-        handler._send_json({'ok':True})
+        open_html = bool(body.get('open_html'))
+        if open_html:
+            html_path = dest / '开始阅读.html'
+            if not html_path.is_file() or html_path.is_symlink() or html_path.resolve().parent != dest.resolve():
+                raise InsightsError('Offline page missing','not_found')
+            subprocess.run(['open', str(html_path)], check=False)
+        else:
+            subprocess.run(['open','-R',str(dest)],check=False)
+        handler._send_json({'ok':True,'opened':'html' if open_html else 'folder'})
         return True
     if path == "/api/insights/context":
         store, binding = _store(handler)

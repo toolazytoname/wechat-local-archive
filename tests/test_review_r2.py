@@ -217,7 +217,7 @@ class ReviewR2Tests(unittest.TestCase):
         )
         self.assertEqual(
             classify_statement_support("你计划按周整理阅读笔记。", "我想每周整理一次笔记。"),
-            "unsupported",
+            "contradicted",
         )
         with tempfile.TemporaryDirectory() as td:
             root, conn = _archive_with_plans(Path(td))

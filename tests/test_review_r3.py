@@ -29,7 +29,7 @@ class _Remote:
 class ReviewR3Tests(unittest.TestCase):
     def test_c01_reversals_are_not_supported_restatements(self) -> None:
         pairs = [
-            ("我想每周整理一次笔记。", "我从来不整理笔记。", "unsupported"),
+            ("我想每周整理一次笔记。", "我从来不整理笔记。", "contradicted"),
             ("我借钱给朋友。", "朋友借钱给我。", "contradicted"),
             ("我不喜欢熬夜。", "你喜欢熬夜。", "contradicted"),
             ("我希望明年去法国旅游。", "我去年已经去法国旅游。", "contradicted"),

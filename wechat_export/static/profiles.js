@@ -243,15 +243,53 @@ function paintCoverageStats(body, preview) {
 
 function runStatusLabel(run) {
   if (run.is_stale || run.stale) return "这份报告基于旧档案，仅作历史，不是当前核实结论";
-  if (run.status === "insufficient") return "资料不足";
-  if (run.status === "partial") return "仅部分原话可核对，不是画像归纳完成";
-  if (run.status === "completed") return "已整理可核对的原话，不是人格鉴定";
+  if (run.status === "insufficient") {
+    const reason = (run.result || {}).insufficient_reason;
+    if (reason === "thin_or_greeting_only") return "资料多是寒暄或短句，不足以整理有上下文的观察";
+    return "资料不足";
+  }
+  if (run.status === "partial") return "仅部分内容可核对，不是画像归纳完成";
+  if (run.status === "completed") return "已整理范围内观察；原话可核对，归纳仍待你确认";
   return run.status || "";
+}
+
+function dimensionLabel(dimension) {
+  return ({
+    stated_plans: "明确提过的计划",
+    stated_priorities: "在意的事情",
+    working_habits: "做事与习惯",
+    communication_preferences: "交流方式",
+    recurring_topics: "常聊的话题",
+    stated_by_friend: "对方的表达",
+    scoped_observation: "范围内观察",
+  })[dimension] || "范围内观察";
+}
+
+function supportLabel(obs) {
+  if (obs.support === "excerpt" || obs.basis === "explicit_excerpt" || obs.verification === "excerpt") {
+    return "可核对原话";
+  }
+  return "待核对归纳";
+}
+
+function groupObservations(observations) {
+  const groups = [];
+  const index = {};
+  for (const obs of observations || []) {
+    if (obs.review_state === "excluded") continue;
+    const key = obs.dimension || "scoped_observation";
+    if (index[key] == null) {
+      index[key] = groups.length;
+      groups.push({ dimension: key, items: [] });
+    }
+    groups[index[key]].items.push(obs);
+  }
+  return groups;
 }
 
 function renderRunObservations(body, run, emptyNote) {
   const exportBtn=el('button',{type:'button',class:'primary'},['导出这份报告']);
-  exportBtn.onclick=async()=>{exportBtn.disabled=true;try{const result=await api('/api/insights/exports',{method:'POST',body:JSON.stringify({kind:'profile',run_id:run.run_id})});const reveal=el('button',{type:'button'},['在访达中显示']);reveal.onclick=()=>api('/api/insights/reveal',{method:'POST',body:JSON.stringify({delivery_id:result.delivery_id})});body.prepend(el('p',{class:'notice'},['已导出 Markdown、JSON 和离线网页。']),reveal);}catch(e){body.prepend(el('p',{class:'notice'},[e.message]));}finally{exportBtn.disabled=false;}};
+  exportBtn.onclick=async()=>{exportBtn.disabled=true;try{const result=await api('/api/insights/exports',{method:'POST',body:JSON.stringify({kind:'profile',run_id:run.run_id})});const actions=el('div',{class:'inline-actions'});const reveal=el('button',{type:'button'},['在访达中显示']);reveal.onclick=()=>api('/api/insights/reveal',{method:'POST',body:JSON.stringify({delivery_id:result.delivery_id})});const openHtml=el('button',{type:'button'},['打开离线网页']);openHtml.onclick=()=>api('/api/insights/reveal',{method:'POST',body:JSON.stringify({delivery_id:result.delivery_id,open_html:true})});actions.append(reveal,openHtml);body.prepend(el('p',{class:'notice'},['已导出 Markdown、JSON 和离线网页。']),actions);}catch(e){body.prepend(el('p',{class:'notice'},[e.message]));}finally{exportBtn.disabled=false;}};
   body.append(exportBtn);
   if (run.is_stale || run.stale) {
     body.appendChild(el("p", { class: "notice" }, [runStatusLabel(run)]));
@@ -259,57 +297,75 @@ function renderRunObservations(body, run, emptyNote) {
   const result = run.result || {};
   if (result.sampled_count != null || result.candidate_count != null) {
     body.appendChild(el("p", { class: "tiny muted" }, [
-      `候选 ${result.candidate_count || 0} 条，实际取样 ${result.sampled_count || 0} 条，写出观察 ${result.observation_count != null ? result.observation_count : (run.observations || []).length} 条。观察数不是处理消息数。`,
+      `候选 ${result.candidate_count || 0} 条，实际取样 ${result.sampled_count || 0} 条，写出观察 ${result.observation_count != null ? result.observation_count : (run.observations || []).length} 条` +
+      (result.excerpt_count != null || result.grounded_count != null
+        ? `（可核对原话 ${result.excerpt_count || 0} · 待核对归纳 ${result.grounded_count || 0}）`
+        : "") +
+      "。观察数不是处理消息数。",
     ]));
   }
+  body.appendChild(el("p", { class: "tiny muted" }, [
+    "报告分层：标题是范围内观察；展开后才是可核对原话。归纳含义仍需你确认。",
+  ]));
   if (run.status === "insufficient") {
-    body.appendChild(renderEmpty("资料不足", "当前范围内可读发言太少，不能生成观察。"));
+    const reason = result.insufficient_reason === "thin_or_greeting_only"
+      ? "当前范围内多为寒暄、短回复或无实质内容，不能整理成有上下文的画像。可以扩大时间范围，或换一段有具体计划/讨论的对话。"
+      : "当前范围内可读发言太少，不能生成观察。";
+    body.appendChild(renderEmpty("资料不足", reason));
     return;
   }
   if (run.status === "partial" && !(run.observations || []).length) {
-    const rejected = result.rejected_count ? `有 ${result.rejected_count} 条因证据无效或结论不被原文支持而未写入。` : "云端结果未通过原文核对，所以没有写成画像。";
+    const rejected = result.rejected_count ? `有 ${result.rejected_count} 条因证据无效、寒暄过短或结论不被原文支持而未写入。` : "云端结果未通过原文核对，所以没有写成画像。";
     body.appendChild(renderEmpty("没有可核对的观察", rejected + " 这不是画像归纳完成。"));
     return;
   }
-  if (!run.observations.length) {
+  const groups = groupObservations(run.observations || []);
+  if (!groups.length) {
     body.appendChild(el("p", { class: "notice" }, [emptyNote]));
   }
-  for (const obs of run.observations) {
-    if (obs.review_state === "excluded") continue;
-    const entry = el("section", { class: "entry" });
-    entry.appendChild(el("h3", {}, [obs.statement]));
-    entry.appendChild(el("p", { class: "tiny muted" }, [({stated_plans:"明确说过的计划",stated_priorities:"在意的事情",working_habits:"工作与习惯",communication_preferences:"交流偏好",recurring_topics:"常聊的话题",stated_by_friend:"对方的表达"})[obs.dimension] || "聊天中的观察"]));
-    const evidenceDetails=el("details",{class:"observation-evidence"});
-    evidenceDetails.append(el("summary",{},["查看原文与说明"]),el("p",{class:"tiny muted"},[(obs.caveats || []).join(" ")]));
-    for(const evidence of obs.evidence || [])evidenceDetails.append(el("blockquote",{},[evidence.quote || ""]));
-    entry.append(evidenceDetails);
-    const ev = (obs.evidence || [])[0];
-    if (ev && ev.record_uid) {
-      const jump = el("button", { type: "button", class: "link" }, ["在聊天中查看"]);
-      jump.addEventListener("click", async () => {
-        jump.disabled=true;
-        try {
-          const convo=(await conversationChoices()).find(c=>c.conversation_id===ev.conversation_id);
-          if(!convo)throw new Error('原会话不在当前档案中，请重新打开档案。');
-          showProductPage("chat");
-          await window.openConvo(convo, true, ev.record_uid);
-        } catch(error){entry.append(el('p',{role:'alert'},[friendlyError(error)]));}
-        finally{jump.disabled=false;}
-      });
-      entry.appendChild(jump);
-    }
-    if (obs.observation_id) {
-      const fix = el("button", { type: "button", class: "link" }, ["排除这条"]);
-      fix.addEventListener("click", async () => {
-        await api(`/api/profiles/observations/${obs.observation_id}/corrections`, {
-          method: "POST",
-          body: JSON.stringify({ action: "exclude" }),
+  for (const group of groups) {
+    body.appendChild(el("h2", { class: "profile-chapter" }, [dimensionLabel(group.dimension)]));
+    for (const obs of group.items) {
+      const entry = el("section", { class: "entry" });
+      entry.appendChild(el("h3", {}, [obs.statement]));
+      entry.appendChild(el("p", { class: "tiny muted" }, [
+        `${supportLabel(obs)} · ${dimensionLabel(obs.dimension)}`,
+      ]));
+      const evidenceDetails=el("details",{class:"observation-evidence"});
+      evidenceDetails.append(
+        el("summary",{},["查看可核对原话与说明"]),
+        el("p",{class:"tiny muted"},[(obs.caveats || []).join(" ")])
+      );
+      for(const evidence of obs.evidence || [])evidenceDetails.append(el("blockquote",{},[evidence.quote || ""]));
+      entry.append(evidenceDetails);
+      const ev = (obs.evidence || [])[0];
+      if (ev && ev.record_uid) {
+        const jump = el("button", { type: "button", class: "link" }, ["在聊天中查看"]);
+        jump.addEventListener("click", async () => {
+          jump.disabled=true;
+          try {
+            const convo=(await conversationChoices()).find(c=>c.conversation_id===ev.conversation_id);
+            if(!convo)throw new Error('原会话不在当前档案中，请重新打开档案。');
+            showProductPage("chat");
+            await window.openConvo(convo, true, ev.record_uid);
+          } catch(error){entry.append(el('p',{role:'alert'},[friendlyError(error)]));}
+          finally{jump.disabled=false;}
         });
-        entry.appendChild(el("p", { class: "tiny" }, ["已排除，下次更新不再使用。"]));
-      });
-      entry.appendChild(fix);
+        entry.appendChild(jump);
+      }
+      if (obs.observation_id) {
+        const fix = el("button", { type: "button", class: "link" }, ["排除这条"]);
+        fix.addEventListener("click", async () => {
+          await api(`/api/profiles/observations/${obs.observation_id}/corrections`, {
+            method: "POST",
+            body: JSON.stringify({ action: "exclude" }),
+          });
+          entry.appendChild(el("p", { class: "tiny" }, ["已排除，下次更新不再使用。"]));
+        });
+        entry.appendChild(fix);
+      }
+      body.appendChild(entry);
     }
-    body.appendChild(entry);
   }
 }
 

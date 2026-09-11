@@ -70,7 +70,9 @@ window.renderLearningPanel = async function renderLearningPanel() {
       status.replaceChildren(el('p',{class:'success-note',role:'status'},[`已导出 ${result.item_count} 项资料。打开文件夹里的「开始阅读.html」即可离线阅读。`]));
       const reveal=el('button',{type:'button'},['打开导出文件夹']);
       reveal.onclick=async()=>{try{await api('/api/insights/reveal',{method:'POST',body:JSON.stringify({delivery_id:result.delivery_id})});}catch(e){status.append(el('p',{role:'alert'},[friendlyError(e)]));}};
-      status.append(reveal);
+      const openHtml=el('button',{type:'button'},['打开离线网页']);
+      openHtml.onclick=async()=>{try{await api('/api/insights/reveal',{method:'POST',body:JSON.stringify({delivery_id:result.delivery_id,open_html:true})});}catch(e){status.append(el('p',{role:'alert'},[friendlyError(e)]));}};
+      status.append(reveal,openHtml);
     } catch(error){showActionError(status,error);}
     finally{busy=false;exportBtn.disabled=!allCount;exportBtn.textContent='导出学习资料';importBtn.disabled=!select.value;}
   };
