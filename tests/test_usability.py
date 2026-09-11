@@ -54,6 +54,17 @@ class UsabilityHttpTests(unittest.TestCase):
         _,runs=self.case._get('/api/profiles/runs?kind=friend')
         self.assertEqual(runs['runs'][0]['scope'],scope)
 
+    def test_task_public_scope_is_explicit_for_reconnecting_only_the_selected_friend(self):
+        from wechat_export.jobs import Job
+        from wechat_export.insights.tasks import public_task
+        scope={'conversation_id':'synthetic_friend','friend_sender_ids':['synthetic_friend']}
+        job=Job('synthetic','profile_analysis','running','now','now',payload={
+            'profile_kind':'friend','scope':scope,'source_revision':'synthetic-revision','remote':True})
+        result=public_task(job)
+        self.assertEqual(result['scope'],scope)
+        self.assertEqual(result['source_revision'],'synthetic-revision')
+        self.assertNotIn('archive_root',result)
+
 
 class GrokUsabilityTests(unittest.TestCase):
     def test_current_camelcase_structured_output_without_text(self):
@@ -79,6 +90,28 @@ class GrokUsabilityTests(unittest.TestCase):
     def test_allowlisted_error_codes(self):
         for text,code in [('quota exceeded','remote_rate_limit'),('timed out','remote_timeout'),('unknown private response','remote_http')]:
             self.assertEqual(grok_failure_code('',text),code)
+
+
+class ProfileViewStateTests(unittest.TestCase):
+    def test_scope_match_and_finished_history_label(self):
+        import shutil
+        if not shutil.which('node'):
+            self.skipTest('node unavailable')
+        script = r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const label={textContent:'正在处理'},other={textContent:'untouched'};
+const context={window:{},document:{querySelectorAll:()=>[
+  {dataset:{taskId:'selected'},querySelector:()=>label},
+  {dataset:{taskId:'other'},querySelector:()=>other}
+]}};
+vm.createContext(context);vm.runInContext(fs.readFileSync('wechat_export/static/profiles.js','utf8'),context);
+assert(context.sameProfileScope({},{}));
+assert(context.sameProfileScope({conversation_id:'a',friend_sender_ids:['a','b']},{friend_sender_ids:['b','a'],conversation_id:'a'}));
+assert(!context.sameProfileScope({conversation_id:'a'},{conversation_id:'b'}));
+context.updateTaskHistoryState({job_id:'selected',state:'ready',created_at:'2026-01-01T00:00:00Z'});
+assert(label.textContent.includes('已完成'));assert.equal(other.textContent,'untouched');
+"""
+        subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
 
 
 if __name__=='__main__':unittest.main()

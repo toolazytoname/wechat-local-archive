@@ -20,6 +20,7 @@ def public_task(job):
     p=job.payload
     return {'job_id':job.job_id,'state':job.state,'created_at':job.created_at,'phase':p.get('phase'),
             'progress':p.get('progress',0),'run_id':p.get('run_id'),'error':job.error,
+            'scope':p.get('scope',{}),'source_revision':p.get('source_revision'),
             'kind':p.get('profile_kind'),'summary_id':p.get('summary_id'),'item_id':p.get('item_id'),'remote':bool(p.get('remote')),
             'can_restart':job.state in {'failed','blocked','cancelled'} and not p.get('remote'),
             'note':'取消会停止后续处理，但已发出的模型请求无法撤回。' if p.get('remote') else ''}

@@ -223,6 +223,7 @@ async function openLearningItem(itemId) {
     }catch(e){noteStatus.textContent=friendlyError(e);}finally{noteBtn.disabled=false;}
   });
   const readBtn = el("button", { type: "button", class: "primary" }, [item.reading_state === "read" ? "已读" : "标记已读"]);
+  readBtn.disabled=item.reading_state === "read";
   readBtn.addEventListener("click", async () => {
     readBtn.disabled=true;
     try{await api(`/api/learning/items/${itemId}`, { method: "PATCH", body: JSON.stringify({ reading_state: "read", revision: item.revision }) });

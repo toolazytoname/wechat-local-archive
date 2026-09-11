@@ -286,10 +286,15 @@ function renderRunObservations(body, run, emptyNote) {
     const ev = (obs.evidence || [])[0];
     if (ev && ev.record_uid) {
       const jump = el("button", { type: "button", class: "link" }, ["在聊天中查看"]);
-      jump.addEventListener("click", () => {
-        showProductPage("chat");
-        const convo = {conversation_id:ev.conversation_id};
-        if (convo && window.openConvo) window.openConvo(convo, true, ev.record_uid);
+      jump.addEventListener("click", async () => {
+        jump.disabled=true;
+        try {
+          const convo=(await conversationChoices()).find(c=>c.conversation_id===ev.conversation_id);
+          if(!convo)throw new Error('原会话不在当前档案中，请重新打开档案。');
+          showProductPage("chat");
+          await window.openConvo(convo, true, ev.record_uid);
+        } catch(error){entry.append(el('p',{role:'alert'},[friendlyError(error)]));}
+        finally{jump.disabled=false;}
       });
       entry.appendChild(jump);
     }
@@ -377,7 +382,7 @@ async function mountProfileComposer(host, {kind,scope={},name='我'}) {
   intro.append(summary,info,el('div',{class:'profile-start-actions'},[runButton]),options);
   const feedback=el('div',{class:'action-feedback','aria-live':'polite'}),report=el('div',{class:'profile-report'});
   marker.append(intro,feedback,report);
-  let preview,current,busy=false;
+  let preview,current,busy=false,checkingTasks=true;
   function isCurrent(){return marker.isConnected && host.contains(marker);}
   function sync() {
     current=current || defaultAiEngine(preview);
@@ -385,7 +390,21 @@ async function mountProfileComposer(host, {kind,scope={},name='我'}) {
     summary.textContent=kind==='self'?`资料范围：当前档案中的本人发言，排除收藏和手动排除的会话（${(count || 0).toLocaleString()} 条）`:`已选择 ${name} · 仅分析这段私聊中对方的发言`;
     info.textContent=`AI 本次抽取 ${preview.consent?.upload_count || 0} 条文字，不是全量分析。结论须结合原文理解，不是人格鉴定。`;
     optionsSummary.textContent=`AI 服务：${engineLabel(current)} · 更换或检查`;
-    runButton.disabled=busy || !current.available || !preview.consent?.upload_count;
+    runButton.disabled=busy || checkingTasks || !current.available || !preview.consent?.upload_count;
+    for(const control of options.querySelectorAll("input,button"))control.disabled=busy || (control.tagName==="INPUT" && !findEngine(preview,control.value).available);
+  }
+  async function followTask(task) {
+    busy=true;sync();
+    if(report.querySelector('.getting-started'))report.replaceChildren();
+    try {
+      const done=await waitForAnalysis(task,feedback,isCurrent);
+      if(!isCurrent())return;
+      const run=await api(`/api/profiles/runs/${done.run_id}`);
+      if(!isCurrent())return;
+      feedback.replaceChildren(el('p',{class:'success-note',role:'status'},['画像已保存，可以查看下方报告。']));
+      report.replaceChildren(el('h2',{},['本次画像']));renderRunObservations(report,run,'本次没有找到足够的原文依据。');
+    } catch(error){if(isCurrent()){showActionError(feedback,error);feedback.append(settingsButton('检查 AI 设置'));}}
+    finally{busy=false;if(isCurrent())sync();}
   }
   async function prepare() {
     preview=await api('/api/profiles/preview',{method:'POST',body:JSON.stringify({kind,scope})});
@@ -414,9 +433,14 @@ async function mountProfileComposer(host, {kind,scope={},name='我'}) {
     const latest=(listed.runs || []).find(r=>r.engine_id!=='local_explicit' && (kind==='self' || (r.scope?.conversation_id===scope.conversation_id)));
     if(latest){const run=await api(`/api/profiles/runs/${latest.run_id}`);if(isCurrent()){report.append(el('h2',{},['最近的画像']));renderRunObservations(report,run,'本次没有找到足够的原文依据。');}}
     else report.append(el('div',{class:'getting-started'},[el('h2',{},[kind==='self'?'从你的聊天中，读懂自己':`为 ${name} 生成第一份画像`]),el('p',{class:'muted'},['生成后可查看观察、回到原聊天核对，也可以导出报告。不会自动发送任何记录。'])]));
+    const taskList=await api('/api/insights/tasks');
+    if(!isCurrent())return;
+    const active=taskList.tasks.find(t=>t.remote && t.kind===kind && ['queued','running'].includes(t.state) && sameProfileScope(t.scope,scope));
+    checkingTasks=false;
+    if(active)followTask(active);else sync();
   } catch(error){if(isCurrent())showActionError(feedback,error);}
   runButton.onclick=async()=>{
-    if(busy || !current?.available)return;
+    if(busy || checkingTasks || !current?.available)return;
     busy=true;sync();feedback.replaceChildren(el('p',{role:'status'},['正在确认本次发送范围…']));
     try {
       if(!await prepare())return;
@@ -427,12 +451,7 @@ async function mountProfileComposer(host, {kind,scope={},name='我'}) {
       if(!isCurrent())return;
       const ticket=await api('/api/profiles/consent',{method:'POST',body:JSON.stringify({kind,scope,engine:current.id,approve_remote:true})});
       const task=await api('/api/profiles/runs',{method:'POST',body:JSON.stringify({kind,scope,engine:current.id,approve_remote:true,consent_ticket:ticket.ticket_id,background:true})});
-      const done=await waitForAnalysis(task,feedback);
-      if(!isCurrent())return;
-      const run=await api(`/api/profiles/runs/${done.run_id}`);
-      if(!isCurrent())return;
-      feedback.replaceChildren(el('p',{class:'success-note',role:'status'},['画像已保存，可以查看下方报告。']));
-      report.replaceChildren(el('h2',{},['本次画像']));renderRunObservations(report,run,'本次没有找到足够的原文依据。');
+      await followTask(task);
     } catch(error){if(isCurrent()){showActionError(feedback,error);feedback.append(settingsButton('检查 AI 设置'));}}
     finally{busy=false;if(isCurrent())sync();}
   };
@@ -470,7 +489,17 @@ window.renderFriendPanel=async function(){
   } catch(error){showActionError(list,error);}
 };
 
-async function waitForAnalysis(task, host) {
+function sameProfileScope(left={}, right={}) {
+  const normalized=value=>JSON.stringify(Object.fromEntries(Object.keys(value).sort().map(k=>[k,Array.isArray(value[k])?[...value[k]].sort():value[k]])));
+  return normalized(left)===normalized(right);
+}
+function updateTaskHistoryState(task) {
+  const labels={queued:'等待开始',running:'正在处理',ready:'已完成',failed:'未完成',blocked:'已中断',cancelled:'已取消'};
+  for(const row of document.querySelectorAll('.task-row[data-task-id]')) {
+    if(row.dataset.taskId===task.job_id)row.querySelector('.task-state').textContent=`${new Date(task.created_at).toLocaleString('zh-CN')} · ${labels[task.state] || task.state}`;
+  }
+}
+async function waitForAnalysis(task, host, isCurrent=()=>host.isConnected) {
   host.replaceChildren();
   const status = el('p', {class:'notice'}, ['任务已创建，正在处理…']);
   const progress = el('progress', {max:'100', value:'0'});
@@ -482,7 +511,9 @@ async function waitForAnalysis(task, host) {
     catch(err){status.textContent=err.message;cancel.disabled=false;}
   });
   while (true) {
+    if(!isCurrent())throw Object.assign(new Error('页面已切换，任务仍在后台运行。'),{code:'view_changed'});
     task=await api(`/api/insights/tasks/${task.job_id}`);
+    updateTaskHistoryState(task);
     status.textContent=(task.phase || '正在准备')+(task.remote?' · 等待 AI 返回可能需要几分钟':'');
     progress.value=task.progress || 0;
     if(task.state==='ready')return task;
@@ -500,11 +531,11 @@ async function renderTaskHistory(host, kind) {
     if(!tasks.length){details.append(el('p',{class:'muted'},['还没有 AI 生成记录。']));return;}
     const labels={queued:'等待开始',running:'正在处理',ready:'已完成',failed:'未完成',blocked:'已中断',cancelled:'已取消'};
     for(const task of tasks){
-      const row=el('div',{class:'task-row'});row.append(el('span',{},[`${new Date(task.created_at).toLocaleString('zh-CN')} · ${labels[task.state] || task.state}`]));
+      const row=el('div',{class:'task-row','data-task-id':task.job_id});row.append(el('span',{class:'task-state'},[`${new Date(task.created_at).toLocaleString('zh-CN')} · ${labels[task.state] || task.state}`]));
       if(task.state==='ready' && task.run_id){
         const view=el('button',{type:'button'},['查看报告']);view.onclick=async()=>{view.disabled=true;try{const run=await api(`/api/profiles/runs/${task.run_id}`);const report=el('div');row.append(report);renderRunObservations(report,run,'没有可展示原话。');}catch(e){row.append(el('p',{role:'alert'},[friendlyError(e)]));view.disabled=false;}};row.append(view);
       } else if(['running','queued'].includes(task.state)){
-        const follow=el('button',{type:'button'},['查看进度']);follow.onclick=async()=>{follow.disabled=true;const progress=el('div');row.append(progress);try{await waitForAnalysis(task,progress);progress.replaceChildren(el('p',{},['任务已完成，请刷新查看报告。']));}catch(e){progress.textContent=friendlyError(e);}};row.append(follow);
+        const follow=el('button',{type:'button'},['查看进度']);follow.onclick=async()=>{follow.disabled=true;const progress=el('div');row.append(progress);try{const done=await waitForAnalysis(task,progress);const run=await api(`/api/profiles/runs/${done.run_id}`);progress.replaceChildren(el('p',{class:'success-note'},['任务已完成，报告如下。']));renderRunObservations(progress,run,'没有可展示原话。');}catch(e){progress.textContent=friendlyError(e);}};row.append(follow);
       } else if(task.remote && task.state!=='ready')row.append(el('p',{class:'muted'},[friendlyError(task.error)]));
       details.append(row);
     }
