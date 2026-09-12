@@ -385,6 +385,11 @@ def extract_friend_observations(
     return out
 
 
+def cloud_upload_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Records actually sent to a remote/grok provider (thin greetings stay local)."""
+    return [item for item in records if not is_thin_text(item.get("text") or "")]
+
+
 def collect_profile_records(
     conn: sqlite3.Connection,
     *,
@@ -600,7 +605,7 @@ def _observations_from_provider(
         skip_uids=skip_uids,
     )
     records = packed["records"]
-    substantive = [item for item in records if not is_thin_text(item.get("text") or "")]
+    substantive = cloud_upload_records(records)
     packed["substantive_count"] = len(substantive)
     packed["thin_count"] = max(0, len(records) - len(substantive))
     if not substantive:

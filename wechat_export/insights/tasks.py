@@ -38,7 +38,9 @@ class CheckedProvider:
         self.provider=provider;self.expected=expected;self.check=check;self.kind=provider.kind
     def analyze(self,payload):
         self.check()
-        if payload.get('records')!=self.expected:
+        got=[(item or {}).get('record_uid') for item in (payload.get('records') or [])]
+        exp=[(item or {}).get('record_uid') for item in (self.expected or [])]
+        if got!=exp:
             raise InsightsError('Approved input changed; preview again','scope_changed')
         result=self.provider.analyze(payload)
         self.check()

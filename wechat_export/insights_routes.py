@@ -26,6 +26,7 @@ from wechat_export.insights.tasks import start_learning_task, start_profile_task
 from wechat_export.insights.consent import consume_ticket, issue_ticket, require_json_true
 from wechat_export.insights.profile_pipeline import (
     add_correction,
+    cloud_upload_records,
     collect_profile_records,
     coverage,
     excluded_evidence,
@@ -341,6 +342,7 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
                 scope=scope,
                 skip_uids=skip_uids,
             )
+            upload = cloud_upload_records(sample["records"])
             handler._send_json(
                 {
                     "coverage": stats,
@@ -357,10 +359,10 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
                         "model": view.get("model"),
                         "fields": view.get("fields") or [],
                         "attachments": False,
-                        "estimated_chars": sample["estimated_chars"],
-                        "upload_count": len(sample["records"]),
+                        "estimated_chars": sum(len(row.get("text") or "") for row in upload),
+                        "upload_count": len(upload),
                         "scope_hash": None,
-                        "record_uids": sample.get("record_uids") or [row["record_uid"] for row in sample["records"]],
+                        "record_uids": [row["record_uid"] for row in upload],
                     },
                     "note": "收藏学习会话默认不作为人物特征证据。本机原话不上传；Grok CLI 和 BYOK 只发送范围内的文字摘录，不发送附件和密钥。",
                 }
@@ -398,6 +400,7 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
                 scope=body.get("scope") or {},
                 skip_uids=skip_uids,
             )
+            upload = cloud_upload_records(sample["records"])
         finally:
             conn.close()
         ticket = issue_ticket(
@@ -407,7 +410,7 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
             endpoint=getattr(provider, "base_url", None) or getattr(provider, "public_view", lambda: {})().get("host"),
             model=getattr(provider, "model", None),
             scope=body.get("scope") or {},
-            record_uids=[row["record_uid"] for row in sample["records"]],
+            record_uids=[row["record_uid"] for row in upload],
             source_revision=binding.revision,
             identity_revision=identity["revision"],
         )
@@ -431,6 +434,8 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
                 engine=engine,
             )
         conn = handler._db(binding)
+        sample = None
+        upload = None
         try:
             if getattr(provider, "kind", "") in {"remote", "grok_cli"}:
                 identity = load_identity(store)
@@ -445,6 +450,7 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
                     scope=body.get("scope") or {},
                     skip_uids=skip_uids,
                 )
+                upload = cloud_upload_records(sample["records"])
                 consume_ticket(
                     store,
                     ticket_id,
@@ -453,13 +459,13 @@ def handle_write(handler, method: str, path: str, body: dict[str, Any]) -> bool:
                     endpoint=getattr(provider, "base_url", None) or (provider.public_view().get("host") if hasattr(provider, "public_view") else None),
                     model=getattr(provider, "model", None),
                     scope=body.get("scope") or {},
-                    record_uids=[row["record_uid"] for row in sample["records"]],
+                    record_uids=[row["record_uid"] for row in upload],
                     source_revision=binding.revision,
                     identity_revision=identity["revision"],
                 )
             if body.get('background') is True:
                 result=start_profile_task(handler.ctx.job_store,handler.ctx.runtime.data_root,binding,
-                    request=body,provider=provider,approved_records=sample['records'] if getattr(provider,'kind','') in {'remote','grok_cli'} else None)
+                    request=body,provider=provider,approved_records=upload if getattr(provider,'kind','') in {'remote','grok_cli'} else None)
                 handler._send_json(result)
                 return True
             result = run_profile(
